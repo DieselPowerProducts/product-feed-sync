@@ -45,6 +45,10 @@ type PreviewResult = {
   preview: FeedPreviewRecord[];
 };
 
+type PreviewApiResponse =
+  | { ok: true; error: null; result: PreviewResult }
+  | { ok: false; error: string | null; result: PreviewResult };
+
 const columns: Array<{
   key: keyof FeedPreviewRecord;
   label: string;
@@ -108,20 +112,13 @@ export function PreviewPanel(props: {
           cache: "no-store",
         },
       );
-      const payload = (await response.json()) as
-        | { ok: true; result: PreviewResult }
-        | { ok: false; error?: string; result?: PreviewResult };
+      const payload = (await response.json()) as PreviewApiResponse;
+      setResult(payload.result);
 
-      if (!response.ok || !payload.ok || !payload.result) {
-        setResult(null);
-        setError(
-          ("error" in payload ? payload.error : undefined) ??
-            "Preview request failed.",
-        );
+      if (!response.ok || !payload.ok) {
+        setError(payload.error ?? "Preview request failed.");
         return;
       }
-
-      setResult(payload.result);
     } catch (caughtError) {
       setResult(null);
       setError(

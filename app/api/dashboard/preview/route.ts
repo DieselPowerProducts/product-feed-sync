@@ -68,11 +68,9 @@ export async function GET(request: NextRequest) {
     settings,
   });
 
-  return NextResponse.json(
-    {
-      ok: result.ok,
-      result,
-    },
-    { status: result.ok ? 200 : 500 },
-  );
+  return NextResponse.json({
+    ok: result.ok,
+    result,
+    error: result.ok ? null : result.notes[0] ?? "Preview request failed.",
+  });
 }
