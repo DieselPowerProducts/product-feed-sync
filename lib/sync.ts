@@ -97,8 +97,6 @@ const SHOPIFY_FEED_PRODUCTS_QUERY = `
                 inventoryPolicy
                 inventoryQuantity
                 availableForSale
-                weight
-                weightUnit
                 image {
                   url
                 }
@@ -113,6 +111,12 @@ const SHOPIFY_FEED_PRODUCTS_QUERY = `
                   }
                 }
                 inventoryItem {
+                  measurement {
+                    weight {
+                      value
+                      unit
+                    }
+                  }
                   unitCost {
                     amount
                     currencyCode
@@ -229,6 +233,11 @@ interface ShopifyMoney {
   currencyCode: string;
 }
 
+interface ShopifyWeight {
+  value: number;
+  unit: string;
+}
+
 interface ShopifyVariantNode {
   id: string;
   legacyResourceId: string | null;
@@ -240,13 +249,14 @@ interface ShopifyVariantNode {
   inventoryPolicy: string | null;
   inventoryQuantity: number | null;
   availableForSale: boolean;
-  weight: number | null;
-  weightUnit: string | null;
   image?: {
     url?: string | null;
   } | null;
   metafields?: ShopifyConnection<ShopifyMetafieldNode>;
   inventoryItem?: {
+    measurement?: {
+      weight?: ShopifyWeight | null;
+    } | null;
     unitCost?: ShopifyMoney | null;
   } | null;
 }
@@ -360,12 +370,14 @@ function formatMoney(amount: number | null, currencyCode = "USD") {
   return amount === null ? null : `${amount.toFixed(2)} ${currencyCode}`;
 }
 
-function formatWeight(value: number | null, unit: string | null) {
+function formatWeight(weight: ShopifyWeight | null | undefined) {
+  const value = weight?.value ?? null;
+
   if (value === null || !Number.isFinite(value)) {
     return null;
   }
 
-  const normalizedUnit = (unit ?? "POUNDS").toUpperCase();
+  const normalizedUnit = (weight?.unit ?? "POUNDS").toUpperCase();
   const suffix =
     normalizedUnit === "POUNDS"
       ? "lb"
@@ -759,7 +771,7 @@ function buildPreviewRecord(params: {
     custom_label_2: adWordsSpend,
     custom_label_3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
     custom_label_4: parseEngineLabel(product.title),
-    shipping_weight: formatWeight(variant.weight, variant.weightUnit),
+    shipping_weight: formatWeight(variant.inventoryItem?.measurement?.weight),
     shipping_label: stateRestrictions ?? "Standard",
     variant_id: variantId,
     product_id: productId,
