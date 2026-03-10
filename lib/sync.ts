@@ -21,6 +21,8 @@ const DETAIL_VARIANT_LIMIT = 25;
 const DETAIL_MEDIA_LIMIT = 5;
 const DETAIL_METAFIELD_LIMIT = 20;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
+const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
+const GOOGLE_MPN_METAFIELD_KEY = "mpn";
 
 const GOOGLE_PRODUCT_CATEGORY_IDS: Record<string, number> = {
   "motor vehicle parts": 899,
@@ -78,6 +80,9 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
         tags
         updatedAt
         onlineStoreUrl
+        googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
+          value
+        }
         featuredMedia {
           __typename
           ... on MediaImage {
@@ -121,6 +126,9 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
               inventoryPolicy
               inventoryQuantity
               availableForSale
+              googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
+                value
+              }
               image {
                 url
               }
@@ -284,6 +292,10 @@ interface ShopifyMetafieldNode {
   type: string;
 }
 
+interface ShopifySingleMetafieldValue {
+  value: string | null;
+}
+
 interface ShopifyMediaNode {
   __typename: string;
   image?: {
@@ -312,6 +324,7 @@ interface ShopifyVariantNode {
   inventoryPolicy: string | null;
   inventoryQuantity: number | null;
   availableForSale: boolean;
+  googleMpn?: ShopifySingleMetafieldValue | null;
   image?: {
     url?: string | null;
   } | null;
@@ -336,6 +349,7 @@ interface ShopifyProductNode {
   tags: string[];
   updatedAt: string;
   onlineStoreUrl: string | null;
+  googleMpn?: ShopifySingleMetafieldValue | null;
   featuredMedia?: ShopifyMediaNode | null;
   media?: ShopifyConnection<ShopifyMediaNode>;
   metafields?: ShopifyConnection<ShopifyMetafieldNode>;
@@ -823,17 +837,10 @@ function buildPreviewRecord(params: {
   const gtin =
     normalizeGtin(variant.barcode) ??
     normalizeGtin(readMappedValue(mergedMetafields, ["gtin"]));
-  const mpn =
-    readMappedValue(mergedMetafields, [
-      "googlempn",
-      "google_mpn",
-      "mpn",
-      "custom.googlempn",
-      "custom.google_mpn",
-      "feed.googlempn",
-      "feed.google_mpn",
-    ]) ??
-    pickFirstNonEmpty(variant.sku);
+  const mpn = pickFirstNonEmpty(
+    variant.googleMpn?.value ?? null,
+    product.googleMpn?.value ?? null,
+  );
   const stateRestrictions = readMappedValue(mergedMetafields, [
     "state_restrictions",
     "custom.state_restrictions",
