@@ -7,33 +7,46 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+type GooglePriceValue = {
+  amountMicros: string;
+  currencyCode: string;
+};
+
+type GoogleWeightValue = {
+  value: number;
+  unit: string;
+};
+
 type FeedPreviewRecord = {
-  id: string;
-  title: string;
-  description: string;
-  link: string;
-  image_link: string;
-  additional_image_link: string | null;
-  availability: "in_stock" | "out_of_stock";
-  price: string;
-  sale_price: string | null;
-  google_product_category: number | string | null;
-  product_type: string | null;
-  brand: string | null;
-  gtin: string | null;
-  mpn: string | null;
-  identifier_exists: "yes" | "no";
-  item_group_id: string;
-  custom_label_0: string | null;
-  custom_label_1: string | null;
-  custom_label_2: string | null;
-  custom_label_3: string | null;
-  custom_label_4: string | null;
-  shipping_weight: string | null;
-  shipping_label: string;
-  variant_id: string;
-  product_id: string;
-  cost_of_goods_sold: string | null;
+  offerId: string;
+  contentLanguage: string;
+  feedLabel: string;
+  productAttributes: {
+    title: string;
+    description: string;
+    link: string;
+    imageLink: string;
+    additionalImageLinks: string[];
+    availability: "IN_STOCK" | "OUT_OF_STOCK";
+    price: GooglePriceValue;
+    salePrice: GooglePriceValue | null;
+    condition: "NEW";
+    googleProductCategory: string | null;
+    productTypes: string[];
+    brand: string | null;
+    gtins: string[];
+    mpn: string | null;
+    identifierExists: boolean;
+    itemGroupId: string;
+    customLabel0: string | null;
+    customLabel1: string | null;
+    customLabel2: string | null;
+    customLabel3: string | null;
+    customLabel4: string | null;
+    shippingWeight: GoogleWeightValue | null;
+    shippingLabel: string;
+    costOfGoodsSold: GooglePriceValue | null;
+  };
 };
 
 type PreviewResult = {
@@ -65,77 +78,203 @@ type PreviewProgress = {
   message: string;
 };
 
-type ColumnKey = keyof FeedPreviewRecord;
+type CellValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | GooglePriceValue
+  | GoogleWeightValue
+  | string[];
 
-const columns: Array<{
-  key: ColumnKey;
+type ColumnDefinition = {
+  id: string;
   label: string;
-}> = [
-  { key: "id", label: "id" },
-  { key: "title", label: "title" },
-  { key: "description", label: "description" },
-  { key: "link", label: "link" },
-  { key: "image_link", label: "image_link" },
-  { key: "additional_image_link", label: "additional_image_link" },
-  { key: "availability", label: "availability" },
-  { key: "price", label: "price" },
-  { key: "sale_price", label: "sale_price" },
-  { key: "google_product_category", label: "google_product_category" },
-  { key: "product_type", label: "product_type" },
-  { key: "brand", label: "brand" },
-  { key: "gtin", label: "gtin" },
-  { key: "mpn", label: "mpn" },
-  { key: "identifier_exists", label: "identifier_exists" },
-  { key: "item_group_id", label: "item_group_id" },
-  { key: "custom_label_0", label: "custom_label_0" },
-  { key: "custom_label_1", label: "custom_label_1" },
-  { key: "custom_label_2", label: "custom_label_2" },
-  { key: "custom_label_3", label: "custom_label_3" },
-  { key: "custom_label_4", label: "custom_label_4" },
-  { key: "shipping_weight", label: "shipping_weight" },
-  { key: "shipping_label", label: "shipping_label" },
-  { key: "variant_id", label: "variant_id" },
-  { key: "product_id", label: "product_id" },
-  { key: "cost_of_goods_sold", label: "cost_of_goods_sold" },
+  defaultWidth: number;
+  kind?: "imageLink" | "url";
+  getValue: (record: FeedPreviewRecord) => CellValue;
+};
+
+const columns: ColumnDefinition[] = [
+  { id: "offerId", label: "offerId", defaultWidth: 200, getValue: (record) => record.offerId },
+  {
+    id: "contentLanguage",
+    label: "contentLanguage",
+    defaultWidth: 150,
+    getValue: (record) => record.contentLanguage,
+  },
+  { id: "feedLabel", label: "feedLabel", defaultWidth: 140, getValue: (record) => record.feedLabel },
+  {
+    id: "productAttributes.title",
+    label: "productAttributes.title",
+    defaultWidth: 240,
+    getValue: (record) => record.productAttributes.title,
+  },
+  {
+    id: "productAttributes.description",
+    label: "productAttributes.description",
+    defaultWidth: 360,
+    getValue: (record) => record.productAttributes.description,
+  },
+  {
+    id: "productAttributes.link",
+    label: "productAttributes.link",
+    defaultWidth: 300,
+    kind: "url",
+    getValue: (record) => record.productAttributes.link,
+  },
+  {
+    id: "productAttributes.imageLink",
+    label: "productAttributes.imageLink",
+    defaultWidth: 220,
+    kind: "imageLink",
+    getValue: (record) => record.productAttributes.imageLink,
+  },
+  {
+    id: "productAttributes.additionalImageLinks",
+    label: "productAttributes.additionalImageLinks",
+    defaultWidth: 280,
+    getValue: (record) => record.productAttributes.additionalImageLinks,
+  },
+  {
+    id: "productAttributes.availability",
+    label: "productAttributes.availability",
+    defaultWidth: 170,
+    getValue: (record) => record.productAttributes.availability,
+  },
+  {
+    id: "productAttributes.price",
+    label: "productAttributes.price",
+    defaultWidth: 220,
+    getValue: (record) => record.productAttributes.price,
+  },
+  {
+    id: "productAttributes.salePrice",
+    label: "productAttributes.salePrice",
+    defaultWidth: 220,
+    getValue: (record) => record.productAttributes.salePrice,
+  },
+  {
+    id: "productAttributes.condition",
+    label: "productAttributes.condition",
+    defaultWidth: 150,
+    getValue: (record) => record.productAttributes.condition,
+  },
+  {
+    id: "productAttributes.googleProductCategory",
+    label: "productAttributes.googleProductCategory",
+    defaultWidth: 220,
+    getValue: (record) => record.productAttributes.googleProductCategory,
+  },
+  {
+    id: "productAttributes.productTypes",
+    label: "productAttributes.productTypes",
+    defaultWidth: 220,
+    getValue: (record) => record.productAttributes.productTypes,
+  },
+  {
+    id: "productAttributes.brand",
+    label: "productAttributes.brand",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.brand,
+  },
+  {
+    id: "productAttributes.gtins",
+    label: "productAttributes.gtins",
+    defaultWidth: 200,
+    getValue: (record) => record.productAttributes.gtins,
+  },
+  {
+    id: "productAttributes.mpn",
+    label: "productAttributes.mpn",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.mpn,
+  },
+  {
+    id: "productAttributes.identifierExists",
+    label: "productAttributes.identifierExists",
+    defaultWidth: 170,
+    getValue: (record) => record.productAttributes.identifierExists,
+  },
+  {
+    id: "productAttributes.itemGroupId",
+    label: "productAttributes.itemGroupId",
+    defaultWidth: 180,
+    getValue: (record) => record.productAttributes.itemGroupId,
+  },
+  {
+    id: "productAttributes.customLabel0",
+    label: "productAttributes.customLabel0",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.customLabel0,
+  },
+  {
+    id: "productAttributes.customLabel1",
+    label: "productAttributes.customLabel1",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.customLabel1,
+  },
+  {
+    id: "productAttributes.customLabel2",
+    label: "productAttributes.customLabel2",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.customLabel2,
+  },
+  {
+    id: "productAttributes.customLabel3",
+    label: "productAttributes.customLabel3",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.customLabel3,
+  },
+  {
+    id: "productAttributes.customLabel4",
+    label: "productAttributes.customLabel4",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.customLabel4,
+  },
+  {
+    id: "productAttributes.shippingWeight",
+    label: "productAttributes.shippingWeight",
+    defaultWidth: 210,
+    getValue: (record) => record.productAttributes.shippingWeight,
+  },
+  {
+    id: "productAttributes.shippingLabel",
+    label: "productAttributes.shippingLabel",
+    defaultWidth: 170,
+    getValue: (record) => record.productAttributes.shippingLabel,
+  },
+  {
+    id: "productAttributes.costOfGoodsSold",
+    label: "productAttributes.costOfGoodsSold",
+    defaultWidth: 240,
+    getValue: (record) => record.productAttributes.costOfGoodsSold,
+  },
 ];
 
 const MIN_COLUMN_WIDTH = 100;
 
-const DEFAULT_COLUMN_WIDTHS: Record<ColumnKey, number> = {
-  id: 160,
-  title: 240,
-  description: 360,
-  link: 300,
-  image_link: 200,
-  additional_image_link: 260,
-  availability: 140,
-  price: 120,
-  sale_price: 120,
-  google_product_category: 190,
-  product_type: 180,
-  brand: 160,
-  gtin: 160,
-  mpn: 160,
-  identifier_exists: 150,
-  item_group_id: 170,
-  custom_label_0: 150,
-  custom_label_1: 150,
-  custom_label_2: 150,
-  custom_label_3: 150,
-  custom_label_4: 150,
-  shipping_weight: 160,
-  shipping_label: 160,
-  variant_id: 170,
-  product_id: 170,
-  cost_of_goods_sold: 170,
-};
+const DEFAULT_COLUMN_WIDTHS = Object.fromEntries(
+  columns.map((column) => [column.id, column.defaultWidth]),
+) as Record<string, number>;
 
 function stringifyCellValue(
-  record: FeedPreviewRecord,
-  key: ColumnKey,
+  value: CellValue,
 ) {
-  const value = record[key];
-  return value === null ? "" : String(value);
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+
+  return String(value);
 }
 
 function getCellClassName() {
@@ -157,13 +296,13 @@ export function PreviewPanel(props: {
   const activeRunIdRef = useRef(0);
   const tableViewportRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
-    key: ColumnKey;
+    key: string;
     startX: number;
     startWidth: number;
   } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [tableViewportHeight, setTableViewportHeight] = useState(400);
-  const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
     () => ({ ...DEFAULT_COLUMN_WIDTHS }),
   );
 
@@ -269,7 +408,7 @@ export function PreviewPanel(props: {
   }, []);
 
   function startColumnResize(
-    key: ColumnKey,
+    key: string,
     event: ReactPointerEvent<HTMLButtonElement>,
   ) {
     event.preventDefault();
@@ -374,7 +513,7 @@ export function PreviewPanel(props: {
         ? 100
       : null;
   const tableWidth = columns.reduce(
-    (sum, column) => sum + columnWidths[column.key],
+    (sum, column) => sum + columnWidths[column.id],
     0,
   );
 
@@ -574,10 +713,10 @@ export function PreviewPanel(props: {
                   <colgroup>
                     {columns.map((column) => (
                       <col
-                        key={column.key}
+                        key={column.id}
                         style={{
                           minWidth: `${MIN_COLUMN_WIDTH}px`,
-                          width: `${columnWidths[column.key]}px`,
+                          width: `${columnWidths[column.id]}px`,
                         }}
                       />
                     ))}
@@ -586,11 +725,11 @@ export function PreviewPanel(props: {
                     <tr>
                       {columns.map((column) => (
                         <th
-                          key={column.key}
+                          key={column.id}
                           className="relative border-r border-line/50 px-4 py-3 pr-6 whitespace-nowrap last:border-r-0"
                           style={{
                             minWidth: `${MIN_COLUMN_WIDTH}px`,
-                            width: `${columnWidths[column.key]}px`,
+                            width: `${columnWidths[column.id]}px`,
                           }}
                         >
                           <span className="block overflow-hidden text-ellipsis whitespace-nowrap">
@@ -599,7 +738,7 @@ export function PreviewPanel(props: {
                           <button
                             type="button"
                             aria-label={`Resize ${column.label} column`}
-                            onPointerDown={(event) => startColumnResize(column.key, event)}
+                            onPointerDown={(event) => startColumnResize(column.id, event)}
                             className="absolute top-0 right-0 h-full w-3 translate-x-1/2 cursor-col-resize touch-none"
                           >
                             <span className="absolute inset-y-2 left-1/2 w-px -translate-x-1/2 bg-line" />
@@ -611,54 +750,52 @@ export function PreviewPanel(props: {
                   <tbody>
                     {result.preview.map((record) => (
                       <tr
-                        key={record.id}
+                        key={record.offerId}
                         className="border-b border-line/70 align-top last:border-b-0"
                       >
                         {columns.map((column) => {
-                          const value = stringifyCellValue(record, column.key);
+                          const rawValue = column.getValue(record);
+                          const value = stringifyCellValue(rawValue);
 
-                          if (column.key === "image_link") {
+                          if (column.kind === "imageLink") {
                             return (
                               <td
-                                key={column.key}
+                                key={column.id}
                                 className="px-4 py-4"
                                 style={{
                                   minWidth: `${MIN_COLUMN_WIDTH}px`,
-                                  width: `${columnWidths[column.key]}px`,
+                                  width: `${columnWidths[column.id]}px`,
                                 }}
                               >
                                 <div className="grid gap-3">
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img
-                                    src={record.image_link}
-                                    alt={record.title}
+                                    src={value}
+                                    alt={record.productAttributes.title}
                                     className="h-20 w-20 rounded-2xl border border-line object-cover"
                                   />
                                   <a
-                                    href={record.image_link}
+                                    href={value}
                                     target="_blank"
                                     rel="noreferrer"
-                                    title={record.image_link}
+                                    title={value}
                                     className="block w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 text-accent-strong"
                                   >
-                                    {record.image_link}
+                                    {value}
                                   </a>
                                 </div>
                               </td>
                             );
                           }
 
-                          if (
-                            column.key === "link" ||
-                            column.key === "additional_image_link"
-                          ) {
+                          if (column.kind === "url") {
                             return (
                               <td
-                                key={column.key}
+                                key={column.id}
                                 className="px-4 py-4"
                                 style={{
                                   minWidth: `${MIN_COLUMN_WIDTH}px`,
-                                  width: `${columnWidths[column.key]}px`,
+                                  width: `${columnWidths[column.id]}px`,
                                 }}
                               >
                                 {value ? (
@@ -680,11 +817,11 @@ export function PreviewPanel(props: {
 
                           return (
                             <td
-                              key={column.key}
+                              key={column.id}
                               className="px-4 py-4"
                               style={{
                                 minWidth: `${MIN_COLUMN_WIDTH}px`,
-                                width: `${columnWidths[column.key]}px`,
+                                width: `${columnWidths[column.id]}px`,
                               }}
                             >
                               <div
@@ -704,9 +841,10 @@ export function PreviewPanel(props: {
             </div>
           ) : (
             <div className="rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
-              No normalized rows matched this preview. That usually means the
-              delta lookback window returned no changed products, or the current
-              exclusion rules filtered everything out. Try a full preview next.
+              No Merchant API payload rows matched this preview. That usually
+              means the delta lookback window returned no changed products, or
+              the current exclusion rules filtered everything out. Try a full
+              preview next.
             </div>
           )}
 
@@ -725,9 +863,9 @@ export function PreviewPanel(props: {
         </div>
       ) : (
         <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
-          Run a delta or full preview to see the complete normalized Google feed
-          columns. The preview fetches live Shopify data but does not write
-          anything to Google.
+          Run a delta or full preview to see the exact Google Merchant API
+          payload columns this app is preparing. The preview fetches live
+          Shopify data but does not write anything to Google.
         </div>
       )}
     </article>

@@ -46,6 +46,7 @@ Integration placeholders:
 
 - Shopify store domain, app credentials, and optional direct access token.
 - Google Merchant account ID and API data source.
+- Google feed language, feed label, and currency defaults for `productInputs` payload previews.
 - Google OAuth or service-account credentials.
 - Optional Vercel Blob storage for persistent settings and run history.
 
@@ -58,6 +59,9 @@ Shopify values for this app:
 - `SHOPIFY_API_VERSION`: starter default is `2026-01`.
 - `SHOPIFY_SCOPES`: starter default is `read_inventory,read_metaobjects,read_products`.
 - `SHOPIFY_ADMIN_ACCESS_TOKEN`: optional override. Leave blank if you want the app to mint a temporary token from the client ID and secret on demand.
+- `GOOGLE_CONTENT_LANGUAGE`: starter default is `en`.
+- `GOOGLE_FEED_LABEL`: starter default is `US`.
+- `GOOGLE_FEED_CURRENCY`: starter default is `USD`.
 
 ## Vercel setup
 

@@ -167,33 +167,46 @@ export interface UpcomingSyncDates {
   fullDate: string;
 }
 
+export interface GooglePriceValue {
+  amountMicros: string;
+  currencyCode: string;
+}
+
+export interface GoogleWeightValue {
+  value: number;
+  unit: string;
+}
+
 export interface FeedPreviewRecord {
-  id: string;
-  title: string;
-  description: string;
-  link: string;
-  image_link: string;
-  additional_image_link: string | null;
-  availability: "in_stock" | "out_of_stock";
-  price: string;
-  sale_price: string | null;
-  google_product_category: number | string | null;
-  product_type: string | null;
-  brand: string | null;
-  gtin: string | null;
-  mpn: string | null;
-  identifier_exists: "yes" | "no";
-  item_group_id: string;
-  custom_label_0: string | null;
-  custom_label_1: string | null;
-  custom_label_2: string | null;
-  custom_label_3: string | null;
-  custom_label_4: string | null;
-  shipping_weight: string | null;
-  shipping_label: string;
-  variant_id: string;
-  product_id: string;
-  cost_of_goods_sold: string | null;
+  offerId: string;
+  contentLanguage: string;
+  feedLabel: string;
+  productAttributes: {
+    title: string;
+    description: string;
+    link: string;
+    imageLink: string;
+    additionalImageLinks: string[];
+    availability: "IN_STOCK" | "OUT_OF_STOCK";
+    price: GooglePriceValue;
+    salePrice: GooglePriceValue | null;
+    condition: "NEW";
+    googleProductCategory: string | null;
+    productTypes: string[];
+    brand: string | null;
+    gtins: string[];
+    mpn: string | null;
+    identifierExists: boolean;
+    itemGroupId: string;
+    customLabel0: string | null;
+    customLabel1: string | null;
+    customLabel2: string | null;
+    customLabel3: string | null;
+    customLabel4: string | null;
+    shippingWeight: GoogleWeightValue | null;
+    shippingLabel: string;
+    costOfGoodsSold: GooglePriceValue | null;
+  };
 }
 
 export interface SyncRunResult {
@@ -437,8 +450,15 @@ function parseAmount(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function formatMoney(amount: number | null, currencyCode = "USD") {
-  return amount === null ? null : `${amount.toFixed(2)} ${currencyCode}`;
+function formatMicros(amount: number | null, currencyCode = "USD") {
+  if (amount === null) {
+    return null;
+  }
+
+  return {
+    amountMicros: String(Math.round(amount * 1_000_000)),
+    currencyCode,
+  } satisfies GooglePriceValue;
 }
 
 function formatWeight(weight: ShopifyWeight | null | undefined) {
@@ -449,7 +469,7 @@ function formatWeight(weight: ShopifyWeight | null | undefined) {
   }
 
   const normalizedUnit = (weight?.unit ?? "POUNDS").toUpperCase();
-  const suffix =
+  const unit =
     normalizedUnit === "POUNDS"
       ? "lb"
       : normalizedUnit === "OUNCES"
@@ -460,7 +480,10 @@ function formatWeight(weight: ShopifyWeight | null | undefined) {
             ? "g"
             : normalizedUnit.toLowerCase();
 
-  return `${value.toFixed(1)} ${suffix}`;
+  return {
+    value: Number(value.toFixed(3)),
+    unit,
+  } satisfies GoogleWeightValue;
 }
 
 function pickFirstNonEmpty(...values: Array<string | null | undefined>) {
@@ -488,10 +511,11 @@ function normalizeGoogleProductCategory(value: string | null) {
   }
 
   if (/^\d+$/.test(normalized)) {
-    return Number.parseInt(normalized, 10);
+    return normalized;
   }
 
-  return GOOGLE_PRODUCT_CATEGORY_IDS[normalized.toLowerCase()] ?? normalized;
+  const mappedId = GOOGLE_PRODUCT_CATEGORY_IDS[normalized.toLowerCase()];
+  return mappedId ? String(mappedId) : normalized;
 }
 
 function collectMetafieldLookup(
@@ -761,6 +785,7 @@ function buildPreviewRecord(params: {
   const compareAtAmount = parseAmount(variant.compareAtPrice);
   const hasSalePrice =
     compareAtAmount !== null && compareAtAmount > 0 && compareAtAmount > priceAmount;
+  const currencyCode = env.googleFeedCurrency || "USD";
   const link = normalizeStorefrontUrl({
     fallbackHandle: product.handle,
     onlineStoreUrl: product.onlineStoreUrl,
@@ -824,38 +849,53 @@ function buildPreviewRecord(params: {
     "custom.quick_ship",
     "feed.quick_ship",
   ]);
+  const brand = pickFirstNonEmpty(product.vendor);
+  const productTypeValues = productType ? [productType] : [];
+  const gtins = gtin ? [gtin] : [];
+  const salePrice = hasSalePrice ? formatMicros(priceAmount, currencyCode) : null;
+  const price = formatMicros(
+    hasSalePrice ? compareAtAmount : priceAmount,
+    currencyCode,
+  );
+  const costOfGoodsSold = formatMicros(
+    parseAmount(variant.inventoryItem?.unitCost?.amount ?? null),
+    variant.inventoryItem?.unitCost?.currencyCode ?? currencyCode,
+  );
 
   return {
-    id: `shopify_ZZ_${productId}_${variantId}`,
-    title: product.title,
-    description: stripHtml(product.descriptionHtml),
-    link,
-    image_link: primaryImage,
-    additional_image_link: additionalImage,
-    availability: determineAvailability(variant),
-    price: formatMoney(hasSalePrice ? compareAtAmount : priceAmount) ?? "0.00 USD",
-    sale_price: hasSalePrice ? formatMoney(priceAmount) : null,
-    google_product_category: googleProductCategory,
-    product_type: productType,
-    brand: pickFirstNonEmpty(product.vendor),
-    gtin,
-    mpn,
-    identifier_exists: gtin || mpn ? "yes" : "no",
-    item_group_id: productId,
-    custom_label_0: computePriceBucket(priceAmount),
-    custom_label_1: computeHighPriceBucket(priceAmount),
-    custom_label_2: adWordsSpend,
-    custom_label_3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
-    custom_label_4: parseEngineLabel(product.title),
-    shipping_weight: formatWeight(variant.inventoryItem?.measurement?.weight),
-    shipping_label: stateRestrictions ?? "Standard",
-    variant_id: variantId,
-    product_id: productId,
-    cost_of_goods_sold:
-      formatMoney(
-        parseAmount(variant.inventoryItem?.unitCost?.amount ?? null),
-        variant.inventoryItem?.unitCost?.currencyCode ?? "USD",
-      ) ?? null,
+    offerId: `shopify_ZZ_${productId}_${variantId}`,
+    contentLanguage: env.googleContentLanguage || "en",
+    feedLabel: env.googleFeedLabel || "US",
+    productAttributes: {
+      title: product.title,
+      description: stripHtml(product.descriptionHtml),
+      link,
+      imageLink: primaryImage,
+      additionalImageLinks: additionalImage ? [additionalImage] : [],
+      availability:
+        determineAvailability(variant) === "in_stock" ? "IN_STOCK" : "OUT_OF_STOCK",
+      price: price ?? {
+        amountMicros: "0",
+        currencyCode,
+      },
+      salePrice,
+      condition: "NEW",
+      googleProductCategory,
+      productTypes: productTypeValues,
+      brand,
+      gtins,
+      mpn,
+      identifierExists: Boolean(gtin || mpn),
+      itemGroupId: productId,
+      customLabel0: computePriceBucket(priceAmount),
+      customLabel1: computeHighPriceBucket(priceAmount),
+      customLabel2: adWordsSpend,
+      customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
+      customLabel4: parseEngineLabel(product.title),
+      shippingWeight: formatWeight(variant.inventoryItem?.measurement?.weight),
+      shippingLabel: stateRestrictions ?? "Standard",
+      costOfGoodsSold,
+    },
   };
 }
 
@@ -1228,7 +1268,7 @@ export async function runSync(
       0,
     );
     const notes = [
-      "Dry-run preview fetched live Shopify data and normalized it toward the Google feed shape.",
+      "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
       "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
       `Product details are hydrated in batches of ${DETAIL_BATCH_SIZE} products with up to ${DETAIL_VARIANT_LIMIT} variants per product to stay under Shopify's query cost limit.`,
       "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
