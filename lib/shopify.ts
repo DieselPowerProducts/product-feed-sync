@@ -221,71 +221,50 @@ export async function fetchShopConnectionDetails(params: {
   accessToken: string;
   shop: string;
 }): Promise<ShopifyConnectionCheck> {
-  const response = await fetch(
-    `https://${params.shop}/admin/api/${env.shopifyApiVersion}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": params.accessToken,
-      },
-      body: JSON.stringify({
-        query: `
-          query ShopIdentity {
-            shop {
-              name
-              myshopifyDomain
-              primaryDomain {
-                url
-              }
-            }
-          }
-        `,
-      }),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-
-    return {
-      connected: false,
-      error: `Shopify connection test failed: ${response.status} ${body}`,
-    };
-  }
-
-  const payload =
-    (await response.json()) as ShopifyGraphqlResponse<{
+  try {
+    const payload = await runShopifyAdminGraphql<{
       shop?: {
         name: string;
         myshopifyDomain: string;
         primaryDomain?: { url?: string | null } | null;
       };
-    }>;
+    }>({
+      shop: params.shop,
+      accessToken: params.accessToken,
+      query: `
+        query ShopIdentity {
+          shop {
+            name
+            myshopifyDomain
+            primaryDomain {
+              url
+            }
+          }
+        }
+      `,
+    });
 
-  if (payload.errors?.length) {
+    if (!payload.shop) {
+      return {
+        connected: false,
+        error: "Shopify returned no shop payload.",
+      };
+    }
+
+    return {
+      connected: true,
+      shop: {
+        name: payload.shop.name,
+        myshopifyDomain: payload.shop.myshopifyDomain,
+        primaryDomainUrl: payload.shop.primaryDomain?.url ?? null,
+      },
+    };
+  } catch (error) {
     return {
       connected: false,
-      error: payload.errors.map((entry) => entry.message).join("; "),
+      error: error instanceof Error ? error.message : "Unknown Shopify error.",
     };
   }
-
-  if (!payload.data?.shop) {
-    return {
-      connected: false,
-      error: "Shopify returned no shop payload.",
-    };
-  }
-
-  return {
-    connected: true,
-    shop: {
-      name: payload.data.shop.name,
-      myshopifyDomain: payload.data.shop.myshopifyDomain,
-      primaryDomainUrl: payload.data.shop.primaryDomain?.url ?? null,
-    },
-  };
 }
 
 export async function getRuntimeShopifyConnection() {
@@ -338,4 +317,67 @@ export async function getRuntimeShopifyAccessToken(): Promise<ShopifyRuntimeToke
   }
 
   return null;
+}
+
+export async function runShopifyAdminGraphql<T>(params: {
+  query: string;
+  variables?: Record<string, unknown>;
+  shop?: string;
+  accessToken?: string;
+}) {
+  const shop = params.shop ?? getConfiguredShopDomain();
+
+  if (!shop) {
+    throw new Error(
+      "Missing or invalid Shopify store domain. Set SHOPIFY_STORE_DOMAIN.",
+    );
+  }
+
+  const accessToken =
+    params.accessToken ?? (await getRuntimeShopifyAccessToken())?.accessToken;
+
+  if (!accessToken) {
+    throw new Error(
+      "Missing Shopify runtime credentials. Provide SHOPIFY_ADMIN_ACCESS_TOKEN or configure SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET for client credentials mode.",
+    );
+  }
+
+  const response = await fetch(
+    `https://${shop}/admin/api/${env.shopifyApiVersion}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken,
+      },
+      body: JSON.stringify({
+        query: params.query,
+        variables: params.variables ?? {},
+      }),
+      cache: "no-store",
+    },
+  );
+
+  const body = await response.text();
+  const payload = body
+    ? (JSON.parse(body) as ShopifyGraphqlResponse<T>)
+    : ({} as ShopifyGraphqlResponse<T>);
+
+  if (!response.ok) {
+    throw new Error(`Shopify GraphQL request failed: ${response.status} ${body}`);
+  }
+
+  if (payload.errors?.length) {
+    throw new Error(
+      `Shopify GraphQL returned errors: ${payload.errors
+        .map((entry) => entry.message)
+        .join("; ")}`,
+    );
+  }
+
+  if (!payload.data) {
+    throw new Error("Shopify GraphQL returned no data.");
+  }
+
+  return payload.data;
 }

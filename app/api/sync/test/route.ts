@@ -12,6 +12,16 @@ function isSupportedMode(
   return value === "delta" || value === "full";
 }
 
+function readPreviewLimit(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 5;
+  }
+
+  return Math.min(parsed, 25);
+}
+
 export async function GET(request: NextRequest) {
   if (!isAuthorizedManualRequest(request)) {
     return NextResponse.json(
@@ -36,13 +46,20 @@ export async function GET(request: NextRequest) {
   }
 
   const dryRun = readDryRunValue(request.nextUrl.searchParams.get("dryRun"));
+  const previewLimit = readPreviewLimit(
+    request.nextUrl.searchParams.get("limit"),
+  );
   const result = await runSync(mode, {
     trigger: "manual",
     dryRun,
+    previewLimit,
   });
 
-  return NextResponse.json({
-    ok: true,
-    result,
-  });
+  return NextResponse.json(
+    {
+      ok: result.ok,
+      result,
+    },
+    { status: result.ok ? 200 : 500 },
+  );
 }

@@ -34,7 +34,7 @@ const starterRoutes = [
   },
   {
     path: "/api/sync/test?mode=delta&dryRun=1",
-    description: "Protected manual test route for small proof-of-life runs before any live product updates.",
+    description: "Protected manual test route that fetches live Shopify products, applies the starter feed rules, and returns a capped preview batch.",
   },
 ];
 
@@ -42,6 +42,7 @@ const nextSteps = [
   "Add the Shopify client ID and secret in Vercel, then run /api/shopify/install to confirm the app can mint a server-to-server Admin API token.",
   "Use /api/shopify/status after deployment to confirm the runtime token source, scopes, and connection health.",
   "Only use browser OAuth if the app type requires it. This starter now prefers the same client-credentials pattern used by Product Prospector.",
+  "Set MANUAL_SYNC_TOKEN in Vercel, then use /api/sync/test?mode=delta&dryRun=1&limit=5 to preview normalized feed records from Shopify.",
   "Create a Merchant Center API data source first. Google's Merchant API writes to API-backed data sources, not the old spreadsheet fetch flow.",
   "Port the spreadsheet formulas into code and document every exclusion rule so feed behavior is reviewable and changeable.",
 ];
@@ -112,7 +113,8 @@ export default function Home() {
                 <div className="mt-4 grid gap-3 text-sm leading-7 text-[#e9d5c0]">
                   <p>Homepage and deployable app shell are in place.</p>
                   <p>Shopify client-credentials connect, OAuth fallback, and runtime status routes are wired.</p>
-                  <p>Google Merchant credentials and the feed mapper still need to be implemented.</p>
+                  <p>Dry-run Shopify fetch, exclusion rules, and feed preview mapping are now wired.</p>
+                  <p>Google Merchant writes and full-catalog bulk export still need to be implemented.</p>
                 </div>
               </div>
             </div>
@@ -144,7 +146,7 @@ export default function Home() {
               <p>Exclude products tagged with `Google_Exclude`.</p>
               <p>Filter out Loop products, Extend warranties, return shipping items, and empty-image variants.</p>
               <p>Reject bundles or other listings with a price of `0`.</p>
-              <p>Normalize Shopify HTML descriptions, primary URLs, image links, and variant/product IDs into the Google feed shape.</p>
+              <p>Normalize Shopify HTML descriptions, primary URLs, image links, pricing buckets, and variant/product IDs into the Google feed shape.</p>
               <p>Keep a clear code-based mapping layer so the business team can adjust rules without spreadsheet archaeology.</p>
             </div>
           </article>

@@ -10,9 +10,10 @@ Starter Next.js app for a Vercel-hosted Shopify to Google Merchant Center feed s
 - A health endpoint at `/api/health`.
 - A Vercel cron route at `/api/cron/sync`.
 - A protected manual test route at `/api/sync/test`.
+- A dry-run Shopify feed preview that fetches products in GraphQL pages of up to 250 records and returns normalized sample rows.
 - Config helpers for a daily scheduler that can trigger delta syncs every 7 days and full refreshes every 14 days.
 
-Nothing here pushes live product data yet. The current code is intentionally a safe scaffold for Vercel setup and early testing.
+Nothing here pushes live product data to Google yet. The current code is intentionally read-only while the feed mapping is being validated.
 
 ## Local development
 
@@ -61,8 +62,10 @@ Shopify values for this app:
 4. Set `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_CLIENT_ID`, and `SHOPIFY_CLIENT_SECRET` in Vercel.
 5. Visit `/api/shopify/install` on the deployed URL to test the client-credentials handshake.
 6. Visit `/api/shopify/status` on the deployed URL to confirm the runtime token works.
-7. Visit `/api/health`.
-8. Confirm the cron job exists in the Vercel project settings after deploy.
+7. Set `MANUAL_SYNC_TOKEN` in Vercel for the protected preview route.
+8. Visit `/api/sync/test?mode=delta&dryRun=1&limit=5` with `Authorization: Bearer your-token` to preview normalized records.
+9. Visit `/api/health`.
+10. Confirm the cron job exists in the Vercel project settings after deploy.
 
 If you specifically need browser OAuth instead of client credentials:
 
@@ -74,8 +77,8 @@ If you specifically need browser OAuth instead of client credentials:
 ## Suggested implementation path
 
 1. Use Shopify client credentials for server-to-server access so the Vercel cron can mint a fresh Admin API token without a logged-in user.
-2. Build a Shopify product fetcher that only returns active and published products while preserving update timestamps.
-3. Port the spreadsheet logic into a code-based mapper with explicit exclusion rules.
+2. Expand the read-only preview into a full export path that walks the whole catalog. Shopify GraphQL normal pagination tops out at 250 nodes per page, so the true full refresh path should move to Bulk Operations or persisted cursors once the mapper is validated.
+3. Port the remaining spreadsheet logic into a code-based mapper with explicit exclusion rules and taxonomy mapping coverage.
 4. Create a Google Merchant API data source and wire product upserts there.
 5. Add persistence for sync history, run summaries, and the last successful full refresh.
 6. Add alerts for failures or disapproved products.

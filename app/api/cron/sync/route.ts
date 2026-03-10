@@ -33,10 +33,13 @@ export async function GET(request: NextRequest) {
     dryRun: env.defaultDryRun,
   });
 
-  return NextResponse.json({
-    ok: true,
-    skipped: false,
-    decision,
-    result,
-  });
+  return NextResponse.json(
+    {
+      ok: result.ok,
+      skipped: false,
+      decision,
+      result,
+    },
+    { status: result.ok ? 200 : 500 },
+  );
 }
