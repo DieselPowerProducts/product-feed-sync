@@ -1161,6 +1161,15 @@ function getDaysUntilNextRun(
   return remainder === 0 ? 0 : intervalDays - remainder;
 }
 
+function getDaysUntilFollowingRun(
+  now: Date,
+  anchorDate: Date,
+  intervalDays: number,
+) {
+  const daysUntilNextRun = getDaysUntilNextRun(now, anchorDate, intervalDays);
+  return daysUntilNextRun === 0 ? intervalDays : daysUntilNextRun;
+}
+
 export function decideSyncMode(
   now = new Date(),
   settings: SyncSettings = getDefaultSyncSettings(),
@@ -1208,10 +1217,16 @@ export function getUpcomingSyncDates(
 
   return {
     deltaDate: formatDateOnly(
-      addDays(todayUtc, getDaysUntilNextRun(now, anchorDate, settings.deltaIntervalDays)),
+      addDays(
+        todayUtc,
+        getDaysUntilFollowingRun(now, anchorDate, settings.deltaIntervalDays),
+      ),
     ),
     fullDate: formatDateOnly(
-      addDays(todayUtc, getDaysUntilNextRun(now, anchorDate, settings.fullIntervalDays)),
+      addDays(
+        todayUtc,
+        getDaysUntilFollowingRun(now, anchorDate, settings.fullIntervalDays),
+      ),
     ),
   };
 }
