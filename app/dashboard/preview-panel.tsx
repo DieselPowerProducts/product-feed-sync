@@ -536,7 +536,14 @@ export function PreviewPanel(props: {
           <span className="text-sm font-medium text-foreground">Preview mode</span>
           <select
             value={mode}
-            onChange={(event) => setMode(event.target.value as "delta" | "full")}
+            onChange={(event) => {
+              const nextMode = event.target.value as "delta" | "full";
+              setMode(nextMode);
+
+              if (nextMode === "delta") {
+                setExhaustive(false);
+              }
+            }}
             className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
           >
             <option value="delta">Delta preview</option>
@@ -575,17 +582,21 @@ export function PreviewPanel(props: {
         </div>
       </div>
 
-      <label className="mt-4 flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm">
+      <label
+        className={`mt-4 flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm ${mode === "delta" ? "opacity-70" : ""}`}
+      >
         <input
           type="checkbox"
           checked={exhaustive}
           onChange={(event) => setExhaustive(event.target.checked)}
+          disabled={mode === "delta"}
           className="h-4 w-4 accent-[var(--accent)]"
         />
         Exhaustive scan
         <span className="text-muted">
-          Walk all matching catalog pages instead of stopping once enough
-          preview rows have been found.
+          {mode === "delta"
+            ? "Only available for full preview runs."
+            : "Walk all matching catalog pages instead of stopping once enough preview rows have been found."}
         </span>
       </label>
 
