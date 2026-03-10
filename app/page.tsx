@@ -3,11 +3,11 @@ import Link from "next/link";
 const pipeline = [
   {
     title: "1. Ingest from Shopify",
-    body: "Fetch products that are active and eligible, then filter out excluded tags, zero-dollar bundles, warranties, return labels, and products missing critical feed data.",
+    body: "Fetch active, published, and eligible products from Shopify, then filter out excluded tags, zero-dollar bundles, warranties, return labels, and products missing critical feed data.",
   },
   {
     title: "2. Transform for GMC",
-    body: "Replace the spreadsheet formulas with a Node-based mapping layer that normalizes titles, images, availability, identifiers, and required Merchant Center attributes.",
+    body: "Replace the spreadsheet formulas with a Node-based mapping layer that normalizes titles, descriptions, images, availability, price buckets, labels, and required Merchant Center attributes.",
   },
   {
     title: "3. Push through Merchant API",
@@ -17,8 +17,16 @@ const pipeline = [
 
 const starterRoutes = [
   {
+    path: "/api/shopify/install",
+    description: "Starts the Shopify OAuth install flow and requests an offline Admin API token for this app.",
+  },
+  {
+    path: "/api/shopify/status",
+    description: "Uses the configured runtime token to verify that the deployed app can query the connected Shopify store.",
+  },
+  {
     path: "/api/health",
-    description: "Returns starter app health, cadence settings, and whether the core integrations are configured.",
+    description: "Returns app health, cadence settings, and integration readiness for Shopify and Google Merchant.",
   },
   {
     path: "/api/cron/sync",
@@ -31,11 +39,11 @@ const starterRoutes = [
 ];
 
 const nextSteps = [
-  "Confirm the exact cadence. This starter is set for a daily scheduler that only executes delta work every 7 days and full refresh work every 14 days.",
-  "Create the Shopify access path. For a custom app, that is usually the store domain plus Admin API credentials or an offline token.",
-  "Create a Merchant Center API data source first. Google’s Merchant API writes to API-backed data sources, not the old spreadsheet fetch flow.",
+  "Set the Shopify app URL to your Vercel domain and add /api/shopify/callback as an allowed redirection URL.",
+  "Add the Shopify client ID and secret in Vercel, then run /api/shopify/install once to obtain the offline Admin API token.",
+  "Save the returned token as SHOPIFY_ADMIN_ACCESS_TOKEN in Vercel and redeploy before relying on cron runs.",
+  "Create a Merchant Center API data source first. Google's Merchant API writes to API-backed data sources, not the old spreadsheet fetch flow.",
   "Port the spreadsheet formulas into code and document every exclusion rule so feed behavior is reviewable and changeable.",
-  "Keep the first live write as a dry run or a very small subset before enabling the full automation path.",
 ];
 
 export default function Home() {
@@ -50,7 +58,7 @@ export default function Home() {
                 <span className="rounded-full border border-line bg-white/55 px-3 py-1 font-mono text-[11px] tracking-[0.25em] text-accent-strong">
                   Starter App
                 </span>
-                <span>Vercel + Next.js + Cron</span>
+                <span>Vercel + Next.js + Shopify OAuth</span>
               </div>
 
               <div className="max-w-3xl space-y-5">
@@ -58,26 +66,26 @@ export default function Home() {
                   DPP product feed sync
                 </h1>
                 <p className="max-w-2xl text-lg leading-8 text-muted md:text-xl">
-                  This starter repo replaces a spreadsheet-heavy Google
-                  Shopping workflow with a Vercel-hosted sync service that is
-                  ready for Shopify ingestion, feed transformation, and Google
-                  Merchant API delivery.
+                  This app replaces a spreadsheet-heavy Google Shopping
+                  workflow with a Vercel-hosted sync service that can
+                  authenticate to Shopify, normalize the catalog into your feed
+                  format, and push the result into Google Merchant Center.
                 </p>
               </div>
 
               <div className="flex flex-wrap gap-4">
                 <Link
-                  href="/api/health"
+                  href="/api/shopify/install"
                   className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
                 >
-                  Open health route
+                  Connect Shopify
                 </Link>
-                <a
-                  href="#roadmap"
+                <Link
+                  href="/api/shopify/status"
                   className="rounded-full border border-line bg-white/55 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white/85"
                 >
-                  Review implementation outline
-                </a>
+                  Check Shopify status
+                </Link>
               </div>
             </div>
 
@@ -103,8 +111,8 @@ export default function Home() {
                 </p>
                 <div className="mt-4 grid gap-3 text-sm leading-7 text-[#e9d5c0]">
                   <p>Homepage and deployable app shell are in place.</p>
-                  <p>Cron, health, and manual test routes are stubbed.</p>
-                  <p>Shopify and Google Merchant credentials are not wired yet.</p>
+                  <p>Shopify install, callback, and runtime status routes are wired.</p>
+                  <p>Google Merchant credentials and the feed mapper still need to be implemented.</p>
                 </div>
               </div>
             </div>
@@ -136,6 +144,7 @@ export default function Home() {
               <p>Exclude products tagged with `Google_Exclude`.</p>
               <p>Filter out Loop products, Extend warranties, return shipping items, and empty-image variants.</p>
               <p>Reject bundles or other listings with a price of `0`.</p>
+              <p>Normalize Shopify HTML descriptions, primary URLs, image links, and variant/product IDs into the Google feed shape.</p>
               <p>Keep a clear code-based mapping layer so the business team can adjust rules without spreadsheet archaeology.</p>
             </div>
           </article>
@@ -164,7 +173,7 @@ export default function Home() {
                 Starter routes
               </p>
               <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-                Safe entry points for deployment and testing
+                Safe entry points for install, deployment, and testing
               </h2>
             </div>
             <a

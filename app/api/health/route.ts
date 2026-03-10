@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { env, getConfigurationStatus } from "@/lib/env";
+import {
+  getRuntimeShopifyConnection,
+  getShopifyConfigurationStatus,
+} from "@/lib/shopify";
 import { decideSyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
@@ -7,6 +11,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const now = new Date();
+  const shopifyConnection = await getRuntimeShopifyConnection();
 
   return NextResponse.json({
     ok: true,
@@ -20,6 +25,12 @@ export async function GET() {
       defaultDryRun: env.defaultDryRun,
     },
     configuration: getConfigurationStatus(),
+    integrations: {
+      shopify: {
+        ...getShopifyConfigurationStatus(),
+        connection: shopifyConnection,
+      },
+    },
     nextDecision: decideSyncMode(now),
   });
 }

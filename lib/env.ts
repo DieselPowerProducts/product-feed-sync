@@ -31,6 +31,7 @@ function readBoolean(value: string | undefined, fallback: boolean) {
 }
 
 export const env = {
+  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
   cronSecret: process.env.CRON_SECRET ?? "",
   manualSyncToken: process.env.MANUAL_SYNC_TOKEN ?? "",
   syncAnchorDate: process.env.SYNC_ANCHOR_DATE ?? "2026-03-10",
@@ -45,6 +46,10 @@ export const env = {
   shopifyClientId: process.env.SHOPIFY_CLIENT_ID ?? "",
   shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ?? "",
   shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? "",
+  shopifyApiVersion: process.env.SHOPIFY_API_VERSION ?? "2026-01",
+  shopifyScopes:
+    process.env.SHOPIFY_SCOPES ??
+    "read_inventory,read_metaobjects,read_products",
   googleMerchantAccountId: process.env.GOOGLE_MERCHANT_ACCOUNT_ID ?? "",
   googleMerchantDataSource: process.env.GOOGLE_MERCHANT_DATA_SOURCE ?? "",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
@@ -56,10 +61,14 @@ export const env = {
 };
 
 export function getConfigurationStatus() {
-  const shopifyReady =
+  const shopifyOAuthConfigured =
     hasValue(env.shopifyStoreDomain) &&
-    (hasValue(env.shopifyAdminAccessToken) ||
-      (hasValue(env.shopifyClientId) && hasValue(env.shopifyClientSecret)));
+    hasValue(env.shopifyClientId) &&
+    hasValue(env.shopifyClientSecret);
+
+  const shopifyAdminTokenConfigured = hasValue(env.shopifyAdminAccessToken);
+
+  const shopifyReady = shopifyOAuthConfigured || shopifyAdminTokenConfigured;
 
   const googleReady =
     hasValue(env.googleMerchantAccountId) &&
@@ -71,9 +80,12 @@ export function getConfigurationStatus() {
         hasValue(env.googleServiceAccountPrivateKey)));
 
   return {
+    appUrl: hasValue(env.appUrl),
     cronSecret: hasValue(env.cronSecret),
     manualSyncToken: hasValue(env.manualSyncToken),
     shopifyReady,
+    shopifyOAuthConfigured,
+    shopifyAdminTokenConfigured,
     googleReady,
   };
 }
@@ -106,4 +118,8 @@ export function readDryRunValue(value: string | null) {
   }
 
   return readBoolean(value, env.defaultDryRun);
+}
+
+export function hasEnvValue(value?: string | null) {
+  return hasValue(value ?? undefined);
 }
