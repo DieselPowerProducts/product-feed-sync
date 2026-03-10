@@ -117,59 +117,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
         ) : null}
       </section>
 
-      <section className="mt-8 grid gap-5 xl:grid-cols-4">
-        <article className="glass-panel rounded-[1.6rem] p-5">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-            Shopify
-          </p>
-          <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-            {shopifyConnection.connected ? "Connected" : "Issue"}
-          </p>
-          <p className="mt-3 text-sm leading-7 text-muted">
-            {shopifyConnection.connected
-              ? shopifyConnection.shop?.name
-              : shopifyConnection.error}
-          </p>
-        </article>
-
-        <article className="glass-panel rounded-[1.6rem] p-5">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-            Next delta
-          </p>
-          <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-            {upcoming.deltaDate}
-          </p>
-          <p className="mt-3 text-sm leading-7 text-muted">
-            Current interval: every {settings.deltaIntervalDays} day(s)
-          </p>
-        </article>
-
-        <article className="glass-panel rounded-[1.6rem] p-5">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-            Next full
-          </p>
-          <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-            {upcoming.fullDate}
-          </p>
-          <p className="mt-3 text-sm leading-7 text-muted">
-            Current interval: every {settings.fullIntervalDays} day(s)
-          </p>
-        </article>
-
-        <article className="glass-panel rounded-[1.6rem] p-5">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-            Store mode
-          </p>
-          <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-            {prettifyStorageMode(storeStatus.mode)}
-          </p>
-          <p className="mt-3 text-sm leading-7 text-muted">
-            Vercel cron still runs daily at <code>09:00 UTC</code>. The UI
-            controls cadence logic, not the cron clock itself.
-          </p>
-        </article>
-      </section>
-
       <section className="mt-8 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
         <article className="glass-panel rounded-[1.75rem] p-6">
           <div className="flex items-end justify-between gap-4">
@@ -270,6 +217,69 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </form>
         </article>
 
+        <article className="glass-panel rounded-[1.75rem] p-6">
+          <div className="grid gap-4">
+            <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Shopify
+              </p>
+              <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-baseline md:justify-between">
+                <p className="text-3xl font-semibold tracking-[-0.04em] text-foreground">
+                  {shopifyConnection.connected ? "Connected" : "Issue"}
+                </p>
+                <p className="text-sm leading-7 text-muted">
+                  {shopifyConnection.connected
+                    ? shopifyConnection.shop?.name ?? "Connected shop"
+                    : shopifyConnection.error}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                  Next delta
+                </p>
+                <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
+                  {upcoming.deltaDate}
+                </p>
+                <p className="mt-3 text-sm leading-7 text-muted">
+                  Current interval: every {settings.deltaIntervalDays} day(s)
+                </p>
+              </article>
+
+              <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                  Next full
+                </p>
+                <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
+                  {upcoming.fullDate}
+                </p>
+                <p className="mt-3 text-sm leading-7 text-muted">
+                  Current interval: every {settings.fullIntervalDays} day(s)
+                </p>
+              </article>
+            </div>
+
+            <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Store mode
+              </p>
+              <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-baseline md:justify-between">
+                <p className="text-3xl font-semibold tracking-[-0.04em]">
+                  {prettifyStorageMode(storeStatus.mode)}
+                </p>
+                <p className="max-w-xl text-sm leading-7 text-muted">
+                  Vercel cron still runs daily at <code>09:00 UTC</code>. The UI
+                  controls cadence logic, not the cron clock itself.
+                </p>
+              </div>
+            </article>
+          </div>
+        </article>
+      </section>
+
+      <section className="mt-8">
         <PreviewPanel
           defaultPreviewLimit={settings.previewLimit}
           decisionReason={decision.reason}
