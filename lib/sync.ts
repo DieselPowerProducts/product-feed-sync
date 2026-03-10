@@ -15,7 +15,6 @@ import {
 const MS_PER_DAY = 86_400_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
-const MAX_SCAN_PAGES = 4;
 const DEFAULT_PREVIEW_LIMIT = 5;
 const DETAIL_BATCH_SIZE = 5;
 const DETAIL_VARIANT_LIMIT = 25;
@@ -145,6 +144,15 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
   }
 `;
 
+const SHOPIFY_PRODUCTS_COUNT_QUERY = `
+  query FeedProductsCount($query: String!) {
+    productsCount(query: $query, limit: null) {
+      count
+      precision
+    }
+  }
+`;
+
 export type SyncMode = "idle" | "delta" | "full";
 
 export interface SyncDecision {
@@ -206,6 +214,7 @@ export interface SyncRunResult {
     pageSize: number;
     pagesScanned: number;
     scanCompleted: boolean;
+    totalProducts: number | null;
     productsFetched: number;
     variantsConsidered: number;
     recordsPrepared: number;
@@ -214,6 +223,16 @@ export interface SyncRunResult {
   };
   exclusions: Record<string, number>;
   preview: FeedPreviewRecord[];
+}
+
+export interface SyncProgressUpdate {
+  stage: "counting" | "scanning" | "complete";
+  exhaustive: boolean;
+  totalProducts: number | null;
+  productsScanned: number;
+  pagesScanned: number;
+  previewRows: number;
+  message: string;
 }
 
 interface ShopifyPageInfo {
@@ -301,6 +320,13 @@ interface ShopifyFeedProductsPayload {
 
 interface ShopifyProductDetailsPayload {
   nodes?: Array<ShopifyProductNode | null>;
+}
+
+interface ShopifyProductsCountPayload {
+  productsCount?: {
+    count: number;
+    precision: string;
+  } | null;
 }
 
 function parseAnchorDate(value: string) {
@@ -823,6 +849,7 @@ async function buildDryRunPreview(params: {
   previewLimit: number;
   settings: SyncSettings;
   exhaustive: boolean;
+  onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
   const shop = getConfiguredShopDomain();
 
@@ -848,15 +875,54 @@ async function buildDryRunPreview(params: {
   const search = buildSearchQuery(params.mode, params.settings);
   const preview: FeedPreviewRecord[] = [];
   const exclusions: Record<string, number> = {};
+  let totalProducts: number | null = null;
   let cursor: string | null = null;
   let productsFetched = 0;
   let variantsConsidered = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
 
+  if (params.onProgress) {
+    await params.onProgress({
+      stage: "counting",
+      exhaustive: params.exhaustive,
+      totalProducts,
+      productsScanned: 0,
+      pagesScanned: 0,
+      previewRows: 0,
+      message: "Counting matching Shopify products.",
+    });
+  }
+
+  try {
+    const countPayload = await runShopifyAdminGraphql<ShopifyProductsCountPayload>({
+      shop,
+      accessToken: token.accessToken,
+      query: SHOPIFY_PRODUCTS_COUNT_QUERY,
+      variables: {
+        query: search.query,
+      },
+    });
+
+    totalProducts = countPayload.productsCount?.count ?? null;
+  } catch {
+    totalProducts = null;
+  }
+
+  if (params.onProgress) {
+    await params.onProgress({
+      stage: "scanning",
+      exhaustive: params.exhaustive,
+      totalProducts,
+      productsScanned: 0,
+      pagesScanned: 0,
+      previewRows: 0,
+      message: "Starting Shopify catalog scan.",
+    });
+  }
+
   while (
-    pagesScanned < MAX_SCAN_PAGES &&
-    (params.exhaustive || preview.length < params.previewLimit)
+    params.exhaustive || preview.length < params.previewLimit
   ) {
     const payload: ShopifyFeedProductsPayload =
       await runShopifyAdminGraphql<ShopifyFeedProductsPayload>({
@@ -892,7 +958,13 @@ async function buildDryRunPreview(params: {
       candidateIds.push(product.id);
     }
 
+    const shouldHydrateDetails = preview.length < params.previewLimit;
+
     for (const batchIds of chunkArray(candidateIds, DETAIL_BATCH_SIZE)) {
+      if (!shouldHydrateDetails) {
+        break;
+      }
+
       const detailPayload: ShopifyProductDetailsPayload =
         await runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
           shop,
@@ -931,7 +1003,9 @@ async function buildDryRunPreview(params: {
             continue;
           }
 
-          preview.push(record);
+          if (preview.length < params.previewLimit) {
+            preview.push(record);
+          }
 
           if (!params.exhaustive && preview.length >= params.previewLimit) {
             break;
@@ -959,6 +1033,34 @@ async function buildDryRunPreview(params: {
       scanCompleted = true;
       break;
     }
+
+    if (params.onProgress) {
+      await params.onProgress({
+        stage: "scanning",
+        exhaustive: params.exhaustive,
+        totalProducts,
+        productsScanned: productsFetched,
+        pagesScanned,
+        previewRows: preview.length,
+        message: params.exhaustive
+          ? `Scanned ${productsFetched.toLocaleString()} products so far.`
+          : "Sampling matching Shopify products.",
+      });
+    }
+  }
+
+  if (params.onProgress) {
+    await params.onProgress({
+      stage: "complete",
+      exhaustive: params.exhaustive,
+      totalProducts,
+      productsScanned: productsFetched,
+      pagesScanned,
+      previewRows: preview.length,
+      message: scanCompleted
+        ? "Catalog scan completed."
+        : "Catalog scan stopped before reaching the end of the catalog.",
+    });
   }
 
   return {
@@ -969,6 +1071,7 @@ async function buildDryRunPreview(params: {
     exclusions,
     pagesScanned,
     scanCompleted,
+    totalProducts,
     productsFetched,
     variantsConsidered,
   };
@@ -1077,6 +1180,7 @@ export async function runSync(
     persistHistory?: boolean;
     settings?: SyncSettings;
     exhaustive?: boolean;
+    onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
   },
 ): Promise<SyncRunResult> {
   const settings = options.settings ?? (await getSyncSettings());
@@ -1095,6 +1199,7 @@ export async function runSync(
       previewLimit,
       settings,
       exhaustive,
+      onProgress: options.onProgress,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
       (sum, count) => sum + count,
@@ -1120,12 +1225,15 @@ export async function runSync(
     if (exhaustive) {
       notes.push(
         previewRun.scanCompleted
-          ? "Exhaustive scan reached the end of the current matching catalog pages."
-          : `Exhaustive scan stopped at the safety cap of ${MAX_SCAN_PAGES} pages. Raise the page cap or move full refreshes to Shopify Bulk Operations for true whole-catalog coverage.`,
+          ? "Exhaustive scan reached the end of the matching Shopify catalog."
+          : "Exhaustive scan stopped before reaching the end of the catalog.",
       );
-    } else if (previewRun.pagesScanned === MAX_SCAN_PAGES) {
       notes.push(
-        `Preview scanning stopped after ${MAX_SCAN_PAGES} pages. For a true full-catalog export, switch the full-sync path to Shopify Bulk Operations or persist cursors between runs.`,
+        `The preview table still shows only ${previewLimit} normalized rows even after the exhaustive scan completes.`,
+      );
+    } else {
+      notes.push(
+        "Sample preview stops as soon as enough normalized rows have been collected for the requested preview size.",
       );
     }
 
@@ -1147,6 +1255,7 @@ export async function runSync(
         pageSize: SHOPIFY_PAGE_SIZE,
         pagesScanned: previewRun.pagesScanned,
         scanCompleted: previewRun.scanCompleted,
+        totalProducts: previewRun.totalProducts,
         productsFetched: previewRun.productsFetched,
         variantsConsidered: previewRun.variantsConsidered,
         recordsPrepared: previewRun.preview.length,
@@ -1188,6 +1297,7 @@ export async function runSync(
         pageSize: SHOPIFY_PAGE_SIZE,
         pagesScanned: 0,
         scanCompleted: false,
+        totalProducts: null,
         productsFetched: 0,
         variantsConsidered: 0,
         recordsPrepared: 0,

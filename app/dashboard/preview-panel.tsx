@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type FeedPreviewRecord = {
   id: string;
@@ -39,6 +39,7 @@ type PreviewResult = {
     productsFetched: number;
     pagesScanned: number;
     scanCompleted: boolean;
+    totalProducts: number | null;
     recordsPrepared: number;
     excluded: number;
     previewLimit: number;
@@ -48,9 +49,15 @@ type PreviewResult = {
   preview: FeedPreviewRecord[];
 };
 
-type PreviewApiResponse =
-  | { ok: true; error: null; result: PreviewResult }
-  | { ok: false; error: string | null; result: PreviewResult };
+type PreviewProgress = {
+  stage: "counting" | "scanning" | "complete";
+  exhaustive: boolean;
+  totalProducts: number | null;
+  productsScanned: number;
+  pagesScanned: number;
+  previewRows: number;
+  message: string;
+};
 
 const columns: Array<{
   key: keyof FeedPreviewRecord;
@@ -102,38 +109,99 @@ export function PreviewPanel(props: {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PreviewResult | null>(null);
+  const [progress, setProgress] = useState<PreviewProgress | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const activeRunIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      eventSourceRef.current?.close();
+    };
+  }, []);
 
   async function runPreview() {
+    activeRunIdRef.current += 1;
+    const runId = activeRunIdRef.current;
+    eventSourceRef.current?.close();
     setIsLoading(true);
     setError(null);
+    setProgress(null);
+    setResult(null);
 
-    try {
-      const response = await fetch(
-        `/api/dashboard/preview?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
-        {
-          method: "GET",
-          credentials: "same-origin",
-          cache: "no-store",
-        },
-      );
-      const payload = (await response.json()) as PreviewApiResponse;
-      setResult(payload.result);
+    const source = new EventSource(
+      `/api/dashboard/preview-stream?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
+    );
+    eventSourceRef.current = source;
+    let settled = false;
 
-      if (!response.ok || !payload.ok) {
-        setError(payload.error ?? "Preview request failed.");
+    source.addEventListener("progress", (event) => {
+      if (settled || activeRunIdRef.current !== runId) {
         return;
       }
-    } catch (caughtError) {
-      setResult(null);
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unknown preview error.",
-      );
-    } finally {
+
+      const payload = JSON.parse((event as MessageEvent<string>).data) as PreviewProgress;
+      setProgress(payload);
+    });
+
+    source.addEventListener("complete", (event) => {
+      if (settled || activeRunIdRef.current !== runId) {
+        return;
+      }
+
+      settled = true;
+      const payload = JSON.parse((event as MessageEvent<string>).data) as PreviewResult;
+      setResult(payload);
+      setProgress({
+        stage: "complete",
+        exhaustive: payload.exhaustive,
+        totalProducts: payload.stats.totalProducts,
+        productsScanned: payload.stats.productsFetched,
+        pagesScanned: payload.stats.pagesScanned,
+        previewRows: payload.preview.length,
+        message: payload.stats.scanCompleted
+          ? "Catalog scan completed."
+          : "Catalog scan stopped before the end of the catalog.",
+      });
       setIsLoading(false);
-    }
+      eventSourceRef.current = null;
+      source.close();
+    });
+
+    source.addEventListener("failure", (event) => {
+      if (settled || activeRunIdRef.current !== runId) {
+        return;
+      }
+
+      settled = true;
+      const payload =
+        "data" in event && typeof event.data === "string" && event.data
+          ? (JSON.parse(event.data) as { message?: string })
+          : null;
+      setError(payload?.message ?? "Preview request failed.");
+      setIsLoading(false);
+      eventSourceRef.current = null;
+      source.close();
+    });
+
+    source.onerror = () => {
+      if (settled || activeRunIdRef.current !== runId || source.readyState === EventSource.CLOSED) {
+        return;
+      }
+
+      settled = true;
+      setError("Preview stream disconnected.");
+      setIsLoading(false);
+      eventSourceRef.current = null;
+      source.close();
+    };
   }
+
+  const progressPercent =
+    typeof progress?.totalProducts === "number" && progress.totalProducts > 0
+      ? Math.min(100, (progress.productsScanned / progress.totalProducts) * 100)
+      : progress?.stage === "complete" && progress.totalProducts === 0
+        ? 100
+      : null;
 
   return (
     <article className="glass-panel rounded-[1.75rem] p-6">
@@ -207,6 +275,30 @@ export function PreviewPanel(props: {
         </span>
       </label>
 
+      <div className="mt-3">
+        <div className="h-3 overflow-hidden rounded-full border border-line bg-white/60">
+          <div
+            className={`h-full bg-[linear-gradient(90deg,var(--accent),#efc58d)] transition-[width] duration-500 ${isLoading && progressPercent === null ? "animate-pulse" : ""}`}
+            style={{ width: `${progressPercent ?? (isLoading ? 18 : 0)}%` }}
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono uppercase tracking-[0.16em] text-muted">
+          <span>
+            {progress?.message ??
+              (isLoading ? "Starting preview scan." : "Progress will appear here during the scan.")}
+          </span>
+          <span>
+            {progress?.productsScanned
+              ? `${progress.productsScanned.toLocaleString()} scanned`
+              : "0 scanned"}
+            {progress?.totalProducts
+              ? ` / ${progress.totalProducts.toLocaleString()} total`
+              : ""}
+            {progressPercent !== null ? ` (${progressPercent.toFixed(1)}%)` : ""}
+          </span>
+        </div>
+      </div>
+
       <div className="mt-4 text-sm leading-7 text-muted">
         Delta preview only shows products updated inside the current lookback
         window. If it returns no rows, try <strong>Full preview</strong> or
@@ -239,6 +331,14 @@ export function PreviewPanel(props: {
               </p>
               <p className="mt-2 text-sm text-muted">
                 {result.stats.scanCompleted ? "Complete" : "Stopped early"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white/65 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Total matches
+              </p>
+              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
+                {result.stats.totalProducts?.toLocaleString() ?? "Unknown"}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
