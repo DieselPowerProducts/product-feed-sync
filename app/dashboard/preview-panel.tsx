@@ -154,12 +154,14 @@ export function PreviewPanel(props: {
   const [progress, setProgress] = useState<PreviewProgress | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const activeRunIdRef = useRef(0);
+  const tableViewportRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
     key: ColumnKey;
     startX: number;
     startWidth: number;
   } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
+  const [tableViewportHeight, setTableViewportHeight] = useState(400);
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(
     () => ({ ...DEFAULT_COLUMN_WIDTHS }),
   );
@@ -183,6 +185,44 @@ export function PreviewPanel(props: {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    let frame = 0;
+
+    function updateTableViewportHeight() {
+      const viewport = tableViewportRef.current;
+
+      if (!viewport) {
+        return;
+      }
+
+      const rect = viewport.getBoundingClientRect();
+      const bottomPadding = window.innerWidth >= 1024 ? 32 : 20;
+      const nextHeight = Math.max(
+        400,
+        Math.floor(window.innerHeight - rect.top - bottomPadding),
+      );
+
+      setTableViewportHeight((current) =>
+        current === nextHeight ? current : nextHeight,
+      );
+    }
+
+    function requestUpdate() {
+      cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateTableViewportHeight);
+    }
+
+    requestUpdate();
+    window.addEventListener("scroll", requestUpdate, { passive: true });
+    window.addEventListener("resize", requestUpdate);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", requestUpdate);
+      window.removeEventListener("resize", requestUpdate);
+    };
+  }, [result]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -513,7 +553,11 @@ export function PreviewPanel(props: {
 
           {result.preview.length ? (
           <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
-            <div className="overflow-x-auto">
+            <div
+              ref={tableViewportRef}
+              className="overflow-auto"
+              style={{ height: `${tableViewportHeight}px` }}
+            >
               <table
                 className="table-fixed text-left text-sm"
                 style={{ minWidth: `${tableWidth}px`, width: `${tableWidth}px` }}
