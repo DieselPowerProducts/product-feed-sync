@@ -33,9 +33,12 @@ type FeedPreviewRecord = {
 
 type PreviewResult = {
   ok: boolean;
+  exhaustive: boolean;
   query: string;
   stats: {
     productsFetched: number;
+    pagesScanned: number;
+    scanCompleted: boolean;
     recordsPrepared: number;
     excluded: number;
     previewLimit: number;
@@ -95,6 +98,7 @@ export function PreviewPanel(props: {
 }) {
   const [mode, setMode] = useState<"delta" | "full">("delta");
   const [limit, setLimit] = useState(String(props.defaultPreviewLimit));
+  const [exhaustive, setExhaustive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PreviewResult | null>(null);
@@ -105,7 +109,7 @@ export function PreviewPanel(props: {
 
     try {
       const response = await fetch(
-        `/api/dashboard/preview?mode=${mode}&limit=${encodeURIComponent(limit)}`,
+        `/api/dashboard/preview?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
         {
           method: "GET",
           credentials: "same-origin",
@@ -180,7 +184,7 @@ export function PreviewPanel(props: {
             {isLoading ? (
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f9f2e7] border-t-transparent" />
-                Loading preview
+                {exhaustive ? "Scanning catalog" : "Loading preview"}
               </>
             ) : (
               "Run preview"
@@ -188,6 +192,20 @@ export function PreviewPanel(props: {
           </button>
         </div>
       </div>
+
+      <label className="mt-4 flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm">
+        <input
+          type="checkbox"
+          checked={exhaustive}
+          onChange={(event) => setExhaustive(event.target.checked)}
+          className="h-4 w-4 accent-[var(--accent)]"
+        />
+        Exhaustive scan
+        <span className="text-muted">
+          Walk all matching catalog pages instead of stopping once enough
+          preview rows have been found.
+        </span>
+      </label>
 
       <div className="mt-4 text-sm leading-7 text-muted">
         Delta preview only shows products updated inside the current lookback
@@ -210,6 +228,17 @@ export function PreviewPanel(props: {
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
                 {result.stats.productsFetched}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white/65 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Pages scanned
+              </p>
+              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
+                {result.stats.pagesScanned}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                {result.stats.scanCompleted ? "Complete" : "Stopped early"}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
@@ -257,9 +286,9 @@ export function PreviewPanel(props: {
           ) : null}
 
           {result.preview.length ? (
-            <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
-              <div className="overflow-x-auto">
-                <table className="min-w-[2600px] text-left text-sm">
+          <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
+            <div className="overflow-x-auto">
+              <table className="min-w-[2600px] text-left text-sm">
                   <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
                     <tr>
                       {columns.map((column) => (
@@ -327,9 +356,11 @@ export function PreviewPanel(props: {
                             <td key={column.key} className="px-4 py-4">
                               <div
                                 className={
-                                  column.key === "description" || column.key === "title"
-                                    ? "max-w-[24rem] whitespace-normal leading-6 text-muted"
-                                    : "max-w-[16rem] whitespace-normal leading-6 text-muted"
+                                  column.key === "description"
+                                    ? "max-w-[28rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
+                                    : column.key === "title"
+                                      ? "max-w-[20rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
+                                      : "max-w-[16rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
                                 }
                                 title={value}
                               >

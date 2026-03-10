@@ -193,6 +193,7 @@ export interface SyncRunResult {
   trigger: "cron" | "manual";
   mode: Exclude<SyncMode, "idle">;
   dryRun: boolean;
+  exhaustive: boolean;
   scope: string;
   startedAt: string;
   finishedAt: string;
@@ -204,6 +205,7 @@ export interface SyncRunResult {
   stats: {
     pageSize: number;
     pagesScanned: number;
+    scanCompleted: boolean;
     productsFetched: number;
     variantsConsidered: number;
     recordsPrepared: number;
@@ -654,13 +656,18 @@ function buildSyncScope(
   mode: Exclude<SyncMode, "idle">,
   lookbackStart: string | null,
   settings: SyncSettings,
+  exhaustive: boolean,
 ) {
   if (mode === "full") {
-    return "Active Shopify products with online-store URLs, scanned in paginated batches of up to 250.";
+    return exhaustive
+      ? "Active Shopify products with online-store URLs, scanned across all matching pages in paginated batches of up to 250."
+      : "Active Shopify products with online-store URLs, sampled from the full catalog in paginated batches of up to 250.";
   }
 
   return lookbackStart
-    ? `Active Shopify products updated after ${lookbackStart}.`
+    ? exhaustive
+      ? `Active Shopify products updated after ${lookbackStart}, scanned across all matching pages.`
+      : `Active Shopify products updated after ${lookbackStart}, sampled until the preview row target is met.`
     : `Products created or updated in the last ${settings.lookbackDays} day(s).`;
 }
 
@@ -815,6 +822,7 @@ async function buildDryRunPreview(params: {
   mode: Exclude<SyncMode, "idle">;
   previewLimit: number;
   settings: SyncSettings;
+  exhaustive: boolean;
 }) {
   const shop = getConfiguredShopDomain();
 
@@ -844,8 +852,12 @@ async function buildDryRunPreview(params: {
   let productsFetched = 0;
   let variantsConsidered = 0;
   let pagesScanned = 0;
+  let scanCompleted = false;
 
-  while (pagesScanned < MAX_SCAN_PAGES && preview.length < params.previewLimit) {
+  while (
+    pagesScanned < MAX_SCAN_PAGES &&
+    (params.exhaustive || preview.length < params.previewLimit)
+  ) {
     const payload: ShopifyFeedProductsPayload =
       await runShopifyAdminGraphql<ShopifyFeedProductsPayload>({
         shop,
@@ -860,6 +872,7 @@ async function buildDryRunPreview(params: {
     const products = connectionNodes<ShopifyProductNode>(payload.products);
 
     if (products.length === 0) {
+      scanCompleted = true;
       break;
     }
 
@@ -920,28 +933,30 @@ async function buildDryRunPreview(params: {
 
           preview.push(record);
 
-          if (preview.length >= params.previewLimit) {
+          if (!params.exhaustive && preview.length >= params.previewLimit) {
             break;
           }
         }
 
-        if (preview.length >= params.previewLimit) {
+        if (!params.exhaustive && preview.length >= params.previewLimit) {
           break;
         }
       }
 
-      if (preview.length >= params.previewLimit) {
+      if (!params.exhaustive && preview.length >= params.previewLimit) {
         break;
       }
     }
 
     if (!payload.products?.pageInfo?.hasNextPage) {
+      scanCompleted = true;
       break;
     }
 
     cursor = payload.products.pageInfo.endCursor;
 
     if (!cursor) {
+      scanCompleted = true;
       break;
     }
   }
@@ -953,6 +968,7 @@ async function buildDryRunPreview(params: {
     preview,
     exclusions,
     pagesScanned,
+    scanCompleted,
     productsFetched,
     variantsConsidered,
   };
@@ -1044,7 +1060,7 @@ function toHistoryEntry(result: SyncRunResult): SyncHistoryEntry {
     mode: result.mode,
     dryRun: result.dryRun,
     ok: result.ok,
-    scope: result.scope,
+    scope: `${result.scope}${result.exhaustive ? " [exhaustive]" : ""}`,
     query: result.query,
     lookbackStart: result.lookbackStart,
     notes: result.notes.slice(0, 8),
@@ -1060,11 +1076,13 @@ export async function runSync(
     previewLimit?: number;
     persistHistory?: boolean;
     settings?: SyncSettings;
+    exhaustive?: boolean;
   },
 ): Promise<SyncRunResult> {
   const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
   const dryRun = options.dryRun ?? settings.defaultDryRun;
+  const exhaustive = options.exhaustive ?? false;
   const previewLimit = Math.max(
     1,
     Math.min(25, options.previewLimit ?? settings.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
@@ -1076,6 +1094,7 @@ export async function runSync(
       mode,
       previewLimit,
       settings,
+      exhaustive,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
       (sum, count) => sum + count,
@@ -1098,7 +1117,13 @@ export async function runSync(
       );
     }
 
-    if (previewRun.pagesScanned === MAX_SCAN_PAGES) {
+    if (exhaustive) {
+      notes.push(
+        previewRun.scanCompleted
+          ? "Exhaustive scan reached the end of the current matching catalog pages."
+          : `Exhaustive scan stopped at the safety cap of ${MAX_SCAN_PAGES} pages. Raise the page cap or move full refreshes to Shopify Bulk Operations for true whole-catalog coverage.`,
+      );
+    } else if (previewRun.pagesScanned === MAX_SCAN_PAGES) {
       notes.push(
         `Preview scanning stopped after ${MAX_SCAN_PAGES} pages. For a true full-catalog export, switch the full-sync path to Shopify Bulk Operations or persist cursors between runs.`,
       );
@@ -1109,7 +1134,8 @@ export async function runSync(
       trigger: options.trigger,
       mode,
       dryRun,
-      scope: buildSyncScope(mode, previewRun.lookbackStart, settings),
+      exhaustive,
+      scope: buildSyncScope(mode, previewRun.lookbackStart, settings, exhaustive),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -1120,6 +1146,7 @@ export async function runSync(
       stats: {
         pageSize: SHOPIFY_PAGE_SIZE,
         pagesScanned: previewRun.pagesScanned,
+        scanCompleted: previewRun.scanCompleted,
         productsFetched: previewRun.productsFetched,
         variantsConsidered: previewRun.variantsConsidered,
         recordsPrepared: previewRun.preview.length,
@@ -1145,7 +1172,8 @@ export async function runSync(
       trigger: options.trigger,
       mode,
       dryRun,
-      scope: buildSyncScope(mode, null, settings),
+      exhaustive,
+      scope: buildSyncScope(mode, null, settings, exhaustive),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -1159,6 +1187,7 @@ export async function runSync(
       stats: {
         pageSize: SHOPIFY_PAGE_SIZE,
         pagesScanned: 0,
+        scanCompleted: false,
         productsFetched: 0,
         variantsConsidered: 0,
         recordsPrepared: 0,

@@ -27,6 +27,14 @@ function readPreviewLimit(value: string | null, fallback: number) {
   return Math.min(parsed, 25);
 }
 
+function readBooleanish(value: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
 export async function GET(request: NextRequest) {
   if (
     !isOperatorAuthConfigured() ||
@@ -66,6 +74,7 @@ export async function GET(request: NextRequest) {
     previewLimit: limit,
     persistHistory: false,
     settings,
+    exhaustive: readBooleanish(request.nextUrl.searchParams.get("exhaustive")),
   });
 
   return NextResponse.json({
