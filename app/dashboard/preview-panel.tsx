@@ -41,6 +41,7 @@ type PreviewResult = {
   exhaustive: boolean;
   query: string;
   stats: {
+    pageSize: number;
     productsFetched: number;
     pagesScanned: number;
     scanCompleted: boolean;
@@ -312,12 +313,20 @@ export function PreviewPanel(props: {
 
       settled = true;
       const payload = JSON.parse((event as MessageEvent<string>).data) as PreviewResult;
+      const progressTotal = payload.exhaustive
+        ? payload.stats.totalProducts
+        : Math.min(
+            payload.stats.totalProducts ?? payload.stats.pageSize,
+            payload.stats.pageSize,
+          );
       setResult(payload);
       setProgress({
         stage: "complete",
         exhaustive: payload.exhaustive,
-        totalProducts: payload.stats.totalProducts,
-        productsScanned: payload.stats.productsFetched,
+        totalProducts: progressTotal,
+        productsScanned: payload.exhaustive
+          ? payload.stats.productsFetched
+          : Math.min(payload.stats.productsFetched, progressTotal ?? payload.stats.pageSize),
         pagesScanned: payload.stats.pagesScanned,
         previewRows: payload.preview.length,
         message: payload.stats.scanCompleted

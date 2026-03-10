@@ -235,6 +235,21 @@ export interface SyncProgressUpdate {
   message: string;
 }
 
+function getProgressTargetTotal(
+  exhaustive: boolean,
+  totalProducts: number | null,
+) {
+  if (exhaustive) {
+    return totalProducts;
+  }
+
+  if (typeof totalProducts === "number") {
+    return Math.min(totalProducts, SHOPIFY_PAGE_SIZE);
+  }
+
+  return SHOPIFY_PAGE_SIZE;
+}
+
 interface ShopifyPageInfo {
   hasNextPage: boolean;
   endCursor: string | null;
@@ -881,12 +896,13 @@ async function buildDryRunPreview(params: {
   let variantsConsidered = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
+  let progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
 
   if (params.onProgress) {
     await params.onProgress({
       stage: "counting",
       exhaustive: params.exhaustive,
-      totalProducts,
+      totalProducts: progressTargetTotal,
       productsScanned: 0,
       pagesScanned: 0,
       previewRows: 0,
@@ -909,11 +925,13 @@ async function buildDryRunPreview(params: {
     totalProducts = null;
   }
 
+  progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
+
   if (params.onProgress) {
     await params.onProgress({
       stage: "scanning",
       exhaustive: params.exhaustive,
-      totalProducts,
+      totalProducts: progressTargetTotal,
       productsScanned: 0,
       pagesScanned: 0,
       previewRows: 0,
@@ -1038,8 +1056,10 @@ async function buildDryRunPreview(params: {
       await params.onProgress({
         stage: "scanning",
         exhaustive: params.exhaustive,
-        totalProducts,
-        productsScanned: productsFetched,
+        totalProducts: progressTargetTotal,
+        productsScanned: params.exhaustive
+          ? productsFetched
+          : Math.min(productsFetched, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
         pagesScanned,
         previewRows: preview.length,
         message: params.exhaustive
@@ -1053,8 +1073,10 @@ async function buildDryRunPreview(params: {
     await params.onProgress({
       stage: "complete",
       exhaustive: params.exhaustive,
-      totalProducts,
-      productsScanned: productsFetched,
+      totalProducts: progressTargetTotal,
+      productsScanned: params.exhaustive
+        ? productsFetched
+        : Math.min(productsFetched, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
       pagesScanned,
       previewRows: preview.length,
       message: scanCompleted
