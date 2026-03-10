@@ -5,7 +5,7 @@ Starter Next.js app for a Vercel-hosted Shopify to Google Merchant Center feed s
 ## What is in this repo
 
 - A deployable homepage at `/` that explains the intended sync flow.
-- Shopify OAuth install and callback routes to obtain an offline Admin API token.
+- Shopify connection routes that use client credentials by default and keep OAuth as a fallback.
 - A Shopify status endpoint at `/api/shopify/status`.
 - A health endpoint at `/api/health`.
 - A Vercel cron route at `/api/cron/sync`.
@@ -39,7 +39,7 @@ Core values:
 
 Integration placeholders:
 
-- Shopify store domain, app credentials, and offline access token.
+- Shopify store domain, app credentials, and optional direct access token.
 - Google Merchant account ID and API data source.
 - Google OAuth or service-account credentials.
 
@@ -48,28 +48,32 @@ Shopify values for this app:
 - `SHOPIFY_STORE_DOMAIN`: your `*.myshopify.com` domain.
 - `SHOPIFY_CLIENT_ID`: from the Shopify app dashboard.
 - `SHOPIFY_CLIENT_SECRET`: from the Shopify app dashboard.
+- `SHOPIFY_AUTH_MODE`: starter default is `client_credentials`.
 - `SHOPIFY_API_VERSION`: starter default is `2026-01`.
 - `SHOPIFY_SCOPES`: starter default is `read_inventory,read_metaobjects,read_products`.
-- `SHOPIFY_ADMIN_ACCESS_TOKEN`: leave blank for the first deploy, then fill it in after `/api/shopify/install` returns the offline token.
+- `SHOPIFY_ADMIN_ACCESS_TOKEN`: optional override. Leave blank if you want the app to mint a temporary token from the client ID and secret on demand.
 
 ## Vercel setup
 
 1. Import this GitHub repo into Vercel.
 2. Add the environment variables from `.env.example`.
 3. Deploy once.
-4. In the Shopify app dashboard, set:
-   App URL: `https://your-vercel-domain`
-   Allowed redirection URL: `https://your-vercel-domain/api/shopify/callback`
-5. Visit `/api/shopify/install` on the deployed URL to complete the Shopify OAuth handshake.
-6. Copy the returned offline token into the Vercel environment variable `SHOPIFY_ADMIN_ACCESS_TOKEN`.
-7. Redeploy.
-8. Visit `/api/shopify/status` on the deployed URL to confirm the runtime token works.
-9. Visit `/api/health`.
-10. Confirm the cron job exists in the Vercel project settings after deploy.
+4. Set `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_CLIENT_ID`, and `SHOPIFY_CLIENT_SECRET` in Vercel.
+5. Visit `/api/shopify/install` on the deployed URL to test the client-credentials handshake.
+6. Visit `/api/shopify/status` on the deployed URL to confirm the runtime token works.
+7. Visit `/api/health`.
+8. Confirm the cron job exists in the Vercel project settings after deploy.
+
+If you specifically need browser OAuth instead of client credentials:
+
+1. Set the Shopify app URL to `https://your-vercel-domain`.
+2. Add `https://your-vercel-domain/api/shopify/callback` as an allowed redirection URL.
+3. Set `SHOPIFY_AUTH_MODE=oauth`.
+4. Visit `/api/shopify/install?mode=oauth`.
 
 ## Suggested implementation path
 
-1. Keep Shopify access on an offline Admin API token so the Vercel cron can run without a logged-in user.
+1. Use Shopify client credentials for server-to-server access so the Vercel cron can mint a fresh Admin API token without a logged-in user.
 2. Build a Shopify product fetcher that only returns active and published products while preserving update timestamps.
 3. Port the spreadsheet logic into a code-based mapper with explicit exclusion rules.
 4. Create a Google Merchant API data source and wire product upserts there.

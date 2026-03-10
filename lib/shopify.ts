@@ -20,11 +20,19 @@ export interface ShopifyConnectionCheck {
 interface ShopifyTokenResponse {
   access_token: string;
   scope?: string;
+  expires_in?: number;
 }
 
 interface ShopifyGraphqlResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
+}
+
+export interface ShopifyRuntimeToken {
+  accessToken: string;
+  source: "env" | "client_credentials";
+  scope?: string;
+  expiresIn?: number | null;
 }
 
 export function getShopifyCookieNames() {
@@ -88,6 +96,7 @@ export function getShopifyConfigurationStatus() {
 
   return {
     appUrlConfigured: hasEnvValue(env.appUrl),
+    authMode: env.shopifyAuthMode,
     shopConfigured: Boolean(shop),
     clientIdConfigured: hasEnvValue(env.shopifyClientId),
     clientSecretConfigured: hasEnvValue(env.shopifyClientSecret),
@@ -177,6 +186,37 @@ export async function exchangeCodeForAccessToken(params: {
   return (await response.json()) as ShopifyTokenResponse;
 }
 
+export async function exchangeClientCredentialsForAccessToken(params: {
+  shop: string;
+}) {
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: env.shopifyClientId,
+    client_secret: env.shopifyClientSecret,
+  });
+
+  const response = await fetch(
+    `https://${params.shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const payload = await response.text();
+    throw new Error(
+      `Shopify client credentials exchange failed: ${response.status} ${payload}`,
+    );
+  }
+
+  return (await response.json()) as ShopifyTokenResponse;
+}
+
 export async function fetchShopConnectionDetails(params: {
   accessToken: string;
   shop: string;
@@ -249,17 +289,53 @@ export async function fetchShopConnectionDetails(params: {
 }
 
 export async function getRuntimeShopifyConnection() {
-  const shop = getConfiguredShopDomain();
+  const token = await getRuntimeShopifyAccessToken();
 
-  if (!shop || !hasEnvValue(env.shopifyAdminAccessToken)) {
+  if (!token) {
     return {
       connected: false,
-      error: "Missing SHOPIFY_STORE_DOMAIN or SHOPIFY_ADMIN_ACCESS_TOKEN.",
+      error:
+        "Missing Shopify runtime credentials. Provide SHOPIFY_ADMIN_ACCESS_TOKEN or configure SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET for client credentials mode.",
     } satisfies ShopifyConnectionCheck;
   }
 
   return fetchShopConnectionDetails({
-    shop,
-    accessToken: env.shopifyAdminAccessToken,
+    shop: getConfiguredShopDomain()!,
+    accessToken: token.accessToken,
   });
+}
+
+export async function getRuntimeShopifyAccessToken(): Promise<ShopifyRuntimeToken | null> {
+  const shop = getConfiguredShopDomain();
+
+  if (!shop) {
+    return null;
+  }
+
+  if (hasEnvValue(env.shopifyAdminAccessToken)) {
+    return {
+      accessToken: env.shopifyAdminAccessToken,
+      source: "env",
+      expiresIn: null,
+    };
+  }
+
+  if (
+    env.shopifyAuthMode !== "oauth" &&
+    hasEnvValue(env.shopifyClientId) &&
+    hasEnvValue(env.shopifyClientSecret)
+  ) {
+    const token = await exchangeClientCredentialsForAccessToken({
+      shop,
+    });
+
+    return {
+      accessToken: token.access_token,
+      source: "client_credentials",
+      scope: token.scope,
+      expiresIn: token.expires_in ?? null,
+    };
+  }
+
+  return null;
 }

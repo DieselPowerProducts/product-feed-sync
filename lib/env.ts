@@ -46,6 +46,7 @@ export const env = {
   shopifyClientId: process.env.SHOPIFY_CLIENT_ID ?? "",
   shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ?? "",
   shopifyAdminAccessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? "",
+  shopifyAuthMode: process.env.SHOPIFY_AUTH_MODE ?? "client_credentials",
   shopifyApiVersion: process.env.SHOPIFY_API_VERSION ?? "2026-01",
   shopifyScopes:
     process.env.SHOPIFY_SCOPES ??
@@ -61,14 +62,15 @@ export const env = {
 };
 
 export function getConfigurationStatus() {
-  const shopifyOAuthConfigured =
+  const shopifyClientCredentialsConfigured =
     hasValue(env.shopifyStoreDomain) &&
     hasValue(env.shopifyClientId) &&
     hasValue(env.shopifyClientSecret);
 
   const shopifyAdminTokenConfigured = hasValue(env.shopifyAdminAccessToken);
 
-  const shopifyReady = shopifyOAuthConfigured || shopifyAdminTokenConfigured;
+  const shopifyReady =
+    shopifyClientCredentialsConfigured || shopifyAdminTokenConfigured;
 
   const googleReady =
     hasValue(env.googleMerchantAccountId) &&
@@ -84,7 +86,7 @@ export function getConfigurationStatus() {
     cronSecret: hasValue(env.cronSecret),
     manualSyncToken: hasValue(env.manualSyncToken),
     shopifyReady,
-    shopifyOAuthConfigured,
+    shopifyClientCredentialsConfigured,
     shopifyAdminTokenConfigured,
     googleReady,
   };

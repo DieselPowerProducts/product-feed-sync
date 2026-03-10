@@ -18,7 +18,7 @@ const pipeline = [
 const starterRoutes = [
   {
     path: "/api/shopify/install",
-    description: "Starts the Shopify OAuth install flow and requests an offline Admin API token for this app.",
+    description: "Tests Shopify connectivity. It uses client credentials by default and only uses browser OAuth when you explicitly request ?mode=oauth.",
   },
   {
     path: "/api/shopify/status",
@@ -39,9 +39,9 @@ const starterRoutes = [
 ];
 
 const nextSteps = [
-  "Set the Shopify app URL to your Vercel domain and add /api/shopify/callback as an allowed redirection URL.",
-  "Add the Shopify client ID and secret in Vercel, then run /api/shopify/install once to obtain the offline Admin API token.",
-  "Save the returned token as SHOPIFY_ADMIN_ACCESS_TOKEN in Vercel and redeploy before relying on cron runs.",
+  "Add the Shopify client ID and secret in Vercel, then run /api/shopify/install to confirm the app can mint a server-to-server Admin API token.",
+  "Use /api/shopify/status after deployment to confirm the runtime token source, scopes, and connection health.",
+  "Only use browser OAuth if the app type requires it. This starter now prefers the same client-credentials pattern used by Product Prospector.",
   "Create a Merchant Center API data source first. Google's Merchant API writes to API-backed data sources, not the old spreadsheet fetch flow.",
   "Port the spreadsheet formulas into code and document every exclusion rule so feed behavior is reviewable and changeable.",
 ];
@@ -68,7 +68,7 @@ export default function Home() {
                 <p className="max-w-2xl text-lg leading-8 text-muted md:text-xl">
                   This app replaces a spreadsheet-heavy Google Shopping
                   workflow with a Vercel-hosted sync service that can
-                  authenticate to Shopify, normalize the catalog into your feed
+                  authenticate to Shopify server-to-server, normalize the catalog into your feed
                   format, and push the result into Google Merchant Center.
                 </p>
               </div>
@@ -111,7 +111,7 @@ export default function Home() {
                 </p>
                 <div className="mt-4 grid gap-3 text-sm leading-7 text-[#e9d5c0]">
                   <p>Homepage and deployable app shell are in place.</p>
-                  <p>Shopify install, callback, and runtime status routes are wired.</p>
+                  <p>Shopify client-credentials connect, OAuth fallback, and runtime status routes are wired.</p>
                   <p>Google Merchant credentials and the feed mapper still need to be implemented.</p>
                 </div>
               </div>
