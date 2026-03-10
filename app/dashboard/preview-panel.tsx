@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 type FeedPreviewRecord = {
   id: string;
@@ -59,8 +64,10 @@ type PreviewProgress = {
   message: string;
 };
 
+type ColumnKey = keyof FeedPreviewRecord;
+
 const columns: Array<{
-  key: keyof FeedPreviewRecord;
+  key: ColumnKey;
   label: string;
 }> = [
   { key: "id", label: "id" },
@@ -91,12 +98,47 @@ const columns: Array<{
   { key: "cost_of_goods_sold", label: "cost_of_goods_sold" },
 ];
 
+const MIN_COLUMN_WIDTH = 100;
+
+const DEFAULT_COLUMN_WIDTHS: Record<ColumnKey, number> = {
+  id: 160,
+  title: 240,
+  description: 360,
+  link: 300,
+  image_link: 200,
+  additional_image_link: 260,
+  availability: 140,
+  price: 120,
+  sale_price: 120,
+  google_product_category: 190,
+  product_type: 180,
+  brand: 160,
+  gtin: 160,
+  mpn: 160,
+  identifier_exists: 150,
+  item_group_id: 170,
+  custom_label_0: 150,
+  custom_label_1: 150,
+  custom_label_2: 150,
+  custom_label_3: 150,
+  custom_label_4: 150,
+  shipping_weight: 160,
+  shipping_label: 160,
+  variant_id: 170,
+  product_id: 170,
+  cost_of_goods_sold: 170,
+};
+
 function stringifyCellValue(
   record: FeedPreviewRecord,
-  key: keyof FeedPreviewRecord,
+  key: ColumnKey,
 ) {
   const value = record[key];
   return value === null ? "" : String(value);
+}
+
+function getCellClassName() {
+  return "block w-full overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted";
 }
 
 export function PreviewPanel(props: {
@@ -112,12 +154,92 @@ export function PreviewPanel(props: {
   const [progress, setProgress] = useState<PreviewProgress | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const activeRunIdRef = useRef(0);
+  const resizeStateRef = useRef<{
+    key: ColumnKey;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+  const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(
+    () => ({ ...DEFAULT_COLUMN_WIDTHS }),
+  );
+
+  useEffect(() => {
+    if (!isResizing) {
+      return;
+    }
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    return () => {
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+  }, [isResizing]);
 
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const resizeState = resizeStateRef.current;
+
+      if (!resizeState) {
+        return;
+      }
+
+      const nextWidth = Math.max(
+        MIN_COLUMN_WIDTH,
+        resizeState.startWidth + (event.clientX - resizeState.startX),
+      );
+
+      setColumnWidths((current) => {
+        if (current[resizeState.key] === nextWidth) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [resizeState.key]: nextWidth,
+        };
+      });
+    }
+
+    function handlePointerUp() {
+      if (!resizeStateRef.current) {
+        return;
+      }
+
+      resizeStateRef.current = null;
+      setIsResizing(false);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
+
+  function startColumnResize(
+    key: ColumnKey,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    event.preventDefault();
+
+    resizeStateRef.current = {
+      key,
+      startX: event.clientX,
+      startWidth: columnWidths[key],
+    };
+    setIsResizing(true);
+  }
 
   async function runPreview() {
     activeRunIdRef.current += 1;
@@ -202,6 +324,10 @@ export function PreviewPanel(props: {
       : progress?.stage === "complete" && progress.totalProducts === 0
         ? 100
       : null;
+  const tableWidth = columns.reduce(
+    (sum, column) => sum + columnWidths[column.key],
+    0,
+  );
 
   return (
     <article className="glass-panel rounded-[1.75rem] p-6">
@@ -388,12 +514,43 @@ export function PreviewPanel(props: {
           {result.preview.length ? (
           <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
             <div className="overflow-x-auto">
-              <table className="min-w-[2600px] text-left text-sm">
+              <table
+                className="table-fixed text-left text-sm"
+                style={{ minWidth: `${tableWidth}px`, width: `${tableWidth}px` }}
+              >
+                  <colgroup>
+                    {columns.map((column) => (
+                      <col
+                        key={column.key}
+                        style={{
+                          minWidth: `${MIN_COLUMN_WIDTH}px`,
+                          width: `${columnWidths[column.key]}px`,
+                        }}
+                      />
+                    ))}
+                  </colgroup>
                   <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
                     <tr>
                       {columns.map((column) => (
-                        <th key={column.key} className="px-4 py-3 whitespace-nowrap">
-                          {column.label}
+                        <th
+                          key={column.key}
+                          className="relative border-r border-line/50 px-4 py-3 pr-6 whitespace-nowrap last:border-r-0"
+                          style={{
+                            minWidth: `${MIN_COLUMN_WIDTH}px`,
+                            width: `${columnWidths[column.key]}px`,
+                          }}
+                        >
+                          <span className="block overflow-hidden text-ellipsis whitespace-nowrap">
+                            {column.label}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Resize ${column.label} column`}
+                            onPointerDown={(event) => startColumnResize(column.key, event)}
+                            className="absolute top-0 right-0 h-full w-3 translate-x-1/2 cursor-col-resize touch-none"
+                          >
+                            <span className="absolute inset-y-2 left-1/2 w-px -translate-x-1/2 bg-line" />
+                          </button>
                         </th>
                       ))}
                     </tr>
@@ -409,7 +566,14 @@ export function PreviewPanel(props: {
 
                           if (column.key === "image_link") {
                             return (
-                              <td key={column.key} className="px-4 py-4">
+                              <td
+                                key={column.key}
+                                className="px-4 py-4"
+                                style={{
+                                  minWidth: `${MIN_COLUMN_WIDTH}px`,
+                                  width: `${columnWidths[column.key]}px`,
+                                }}
+                              >
                                 <div className="grid gap-3">
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img
@@ -421,7 +585,8 @@ export function PreviewPanel(props: {
                                     href={record.image_link}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="max-w-[16rem] break-all text-xs leading-6 text-accent-strong"
+                                    title={record.image_link}
+                                    className="block w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-6 text-accent-strong"
                                   >
                                     {record.image_link}
                                   </a>
@@ -435,13 +600,21 @@ export function PreviewPanel(props: {
                             column.key === "additional_image_link"
                           ) {
                             return (
-                              <td key={column.key} className="px-4 py-4">
+                              <td
+                                key={column.key}
+                                className="px-4 py-4"
+                                style={{
+                                  minWidth: `${MIN_COLUMN_WIDTH}px`,
+                                  width: `${columnWidths[column.key]}px`,
+                                }}
+                              >
                                 {value ? (
                                   <a
                                     href={value}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="max-w-[18rem] break-all leading-6 text-accent-strong"
+                                    title={value}
+                                    className="block w-full overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-accent-strong"
                                   >
                                     {value}
                                   </a>
@@ -453,15 +626,16 @@ export function PreviewPanel(props: {
                           }
 
                           return (
-                            <td key={column.key} className="px-4 py-4">
+                            <td
+                              key={column.key}
+                              className="px-4 py-4"
+                              style={{
+                                minWidth: `${MIN_COLUMN_WIDTH}px`,
+                                width: `${columnWidths[column.key]}px`,
+                              }}
+                            >
                               <div
-                                className={
-                                  column.key === "description"
-                                    ? "max-w-[28rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
-                                    : column.key === "title"
-                                      ? "max-w-[20rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
-                                      : "max-w-[16rem] overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted"
-                                }
+                                className={getCellClassName()}
                                 title={value}
                               >
                                 {value || "-"}
