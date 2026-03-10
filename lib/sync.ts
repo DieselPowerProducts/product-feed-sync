@@ -17,6 +17,10 @@ const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
 const MAX_SCAN_PAGES = 4;
 const DEFAULT_PREVIEW_LIMIT = 5;
+const DETAIL_BATCH_SIZE = 5;
+const DETAIL_VARIANT_LIMIT = 25;
+const DETAIL_MEDIA_LIMIT = 5;
+const DETAIL_METAFIELD_LIMIT = 20;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 
 const GOOGLE_PRODUCT_CATEGORY_IDS: Record<string, number> = {
@@ -34,8 +38,8 @@ const EXCLUDED_TITLE_PHRASES = [
   { phrase: "loop", reason: "loop_product" },
 ] as const;
 
-const SHOPIFY_FEED_PRODUCTS_QUERY = `
-  query FeedProducts($first: Int!, $after: String, $query: String!) {
+const SHOPIFY_PRODUCT_SCAN_QUERY = `
+  query ScanFeedProducts($first: Int!, $after: String, $query: String!) {
     products(first: $first, after: $after, sortKey: UPDATED_AT, reverse: true, query: $query) {
       pageInfo {
         hasNextPage
@@ -54,73 +58,83 @@ const SHOPIFY_FEED_PRODUCTS_QUERY = `
           tags
           updatedAt
           onlineStoreUrl
-          featuredMedia {
-            __typename
-            ... on MediaImage {
-              image {
-                url
-              }
+        }
+      }
+    }
+  }
+`;
+
+const SHOPIFY_PRODUCT_DETAILS_QUERY = `
+  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!, $variantLimit: Int!) {
+    nodes(ids: $ids) {
+      ... on Product {
+        id
+        legacyResourceId
+        title
+        descriptionHtml
+        handle
+        vendor
+        productType
+        status
+        tags
+        updatedAt
+        onlineStoreUrl
+        featuredMedia {
+          __typename
+          ... on MediaImage {
+            image {
+              url
             }
           }
-          media(first: 10) {
-            edges {
-              node {
-                __typename
-                ... on MediaImage {
-                  image {
-                    url
-                  }
-                }
-              }
-            }
-          }
-          metafields(first: 50) {
-            edges {
-              node {
-                namespace
-                key
-                value
-                type
-              }
-            }
-          }
-          variants(first: 100) {
-            edges {
-              node {
-                id
-                legacyResourceId
-                title
-                sku
-                barcode
-                price
-                compareAtPrice
-                inventoryPolicy
-                inventoryQuantity
-                availableForSale
+        }
+        media(first: $mediaLimit) {
+          edges {
+            node {
+              __typename
+              ... on MediaImage {
                 image {
                   url
                 }
-                metafields(first: 50) {
-                  edges {
-                    node {
-                      namespace
-                      key
-                      value
-                      type
-                    }
+              }
+            }
+          }
+        }
+        metafields(first: $metafieldLimit) {
+          edges {
+            node {
+              namespace
+              key
+              value
+              type
+            }
+          }
+        }
+        variants(first: $variantLimit) {
+          edges {
+            node {
+              id
+              legacyResourceId
+              title
+              sku
+              barcode
+              price
+              compareAtPrice
+              inventoryPolicy
+              inventoryQuantity
+              availableForSale
+              image {
+                url
+              }
+              inventoryItem {
+                measurement {
+                  weight {
+                    value
+                    unit
                   }
                 }
-                inventoryItem {
-                  measurement {
-                    weight {
-                      value
-                      unit
-                    }
-                  }
-                  unitCost {
-                    amount
-                    currencyCode
-                  }
+                unitCost {
+                  amount
+                  currencyCode
                 }
               }
             }
@@ -283,6 +297,10 @@ interface ShopifyFeedProductsPayload {
   products?: ShopifyConnection<ShopifyProductNode>;
 }
 
+interface ShopifyProductDetailsPayload {
+  nodes?: Array<ShopifyProductNode | null>;
+}
+
 function parseAnchorDate(value: string) {
   const parsed = new Date(`${value}T00:00:00.000Z`);
 
@@ -314,6 +332,16 @@ function toUtcDayNumber(date: Date) {
 
 function connectionNodes<T>(connection?: ShopifyConnection<T> | null): T[] {
   return connection?.edges?.map((edge) => edge.node) ?? [];
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
 }
 
 function incrementCounter(counter: Record<string, number>, key: string) {
@@ -820,15 +848,15 @@ async function buildDryRunPreview(params: {
   while (pagesScanned < MAX_SCAN_PAGES && preview.length < params.previewLimit) {
     const payload: ShopifyFeedProductsPayload =
       await runShopifyAdminGraphql<ShopifyFeedProductsPayload>({
-      shop,
-      accessToken: token.accessToken,
-      query: SHOPIFY_FEED_PRODUCTS_QUERY,
-      variables: {
-        first: SHOPIFY_PAGE_SIZE,
-        after: cursor,
-        query: search.query,
-      },
-    });
+        shop,
+        accessToken: token.accessToken,
+        query: SHOPIFY_PRODUCT_SCAN_QUERY,
+        variables: {
+          first: SHOPIFY_PAGE_SIZE,
+          after: cursor,
+          query: search.query,
+        },
+      });
     const products = connectionNodes<ShopifyProductNode>(payload.products);
 
     if (products.length === 0) {
@@ -838,6 +866,8 @@ async function buildDryRunPreview(params: {
     pagesScanned += 1;
     productsFetched += products.length;
 
+    const candidateIds: string[] = [];
+
     for (const product of products) {
       const exclusionReason = findProductExclusionReason(product);
 
@@ -846,26 +876,54 @@ async function buildDryRunPreview(params: {
         continue;
       }
 
-      const productMetafields = collectMetafieldLookup(product.metafields);
-      const productMediaUrls = collectMediaUrls(product);
+      candidateIds.push(product.id);
+    }
 
-      for (const variant of connectionNodes<ShopifyVariantNode>(product.variants)) {
-        variantsConsidered += 1;
-
-        const record = buildPreviewRecord({
-          product,
-          variant,
-          storefrontBaseUrl,
-          productMetafields,
-          productMediaUrls,
+    for (const batchIds of chunkArray(candidateIds, DETAIL_BATCH_SIZE)) {
+      const detailPayload: ShopifyProductDetailsPayload =
+        await runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
+          shop,
+          accessToken: token.accessToken,
+          query: SHOPIFY_PRODUCT_DETAILS_QUERY,
+          variables: {
+            ids: batchIds,
+            mediaLimit: DETAIL_MEDIA_LIMIT,
+            metafieldLimit: DETAIL_METAFIELD_LIMIT,
+            variantLimit: DETAIL_VARIANT_LIMIT,
+          },
         });
 
-        if ("excluded" in record) {
-          incrementCounter(exclusions, record.excluded);
-          continue;
-        }
+      const detailedProducts =
+        detailPayload.nodes?.filter(
+          (product): product is ShopifyProductNode => Boolean(product),
+        ) ?? [];
 
-        preview.push(record);
+      for (const product of detailedProducts) {
+        const productMetafields = collectMetafieldLookup(product.metafields);
+        const productMediaUrls = collectMediaUrls(product);
+
+        for (const variant of connectionNodes<ShopifyVariantNode>(product.variants)) {
+          variantsConsidered += 1;
+
+          const record = buildPreviewRecord({
+            product,
+            variant,
+            storefrontBaseUrl,
+            productMetafields,
+            productMediaUrls,
+          });
+
+          if ("excluded" in record) {
+            incrementCounter(exclusions, record.excluded);
+            continue;
+          }
+
+          preview.push(record);
+
+          if (preview.length >= params.previewLimit) {
+            break;
+          }
+        }
 
         if (preview.length >= params.previewLimit) {
           break;
@@ -1026,6 +1084,7 @@ export async function runSync(
     const notes = [
       "Dry-run preview fetched live Shopify data and normalized it toward the Google feed shape.",
       "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
+      `Product details are hydrated in batches of ${DETAIL_BATCH_SIZE} products with up to ${DETAIL_VARIANT_LIMIT} variants per product to stay under Shopify's query cost limit.`,
       "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
     ];
 
