@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
   getOperatorStoreStatus,
@@ -6,12 +7,7 @@ import {
   getSyncSettings,
 } from "@/lib/operator-store";
 import { getRuntimeShopifyConnection } from "@/lib/shopify";
-import {
-  decideSyncMode,
-  getUpcomingSyncDates,
-  runSync,
-  type SyncMode,
-} from "@/lib/sync";
+import { decideSyncMode, getUpcomingSyncDates } from "@/lib/sync";
 import { logoutAction, saveSettingsAction } from "@/app/dashboard/actions";
 
 type DashboardPageProps = {
@@ -24,20 +20,6 @@ function getSearchParam(
 ) {
   const value = searchParams[key];
   return Array.isArray(value) ? value[0] : value;
-}
-
-function readPreviewMode(value: string | undefined): Exclude<SyncMode, "idle"> | null {
-  return value === "delta" || value === "full" ? value : null;
-}
-
-function readPreviewLimit(value: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(value ?? "", 10);
-
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-
-  return Math.min(parsed, 25);
 }
 
 function formatTimestamp(value: string) {
@@ -75,20 +57,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
   ]);
   const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
-  const previewMode = readPreviewMode(getSearchParam(searchParams, "previewMode"));
-  const previewLimit = readPreviewLimit(
-    getSearchParam(searchParams, "limit"),
-    settings.previewLimit,
-  );
-  const previewResult = previewMode
-    ? await runSync(previewMode, {
-        trigger: "manual",
-        dryRun: true,
-        previewLimit,
-        persistHistory: false,
-        settings,
-      })
-    : null;
   const saved = getSearchParam(searchParams, "saved") === "settings";
 
   return (
@@ -302,188 +270,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </form>
         </article>
 
-        <article className="glass-panel rounded-[1.75rem] p-6">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
-                Feed preview
-              </p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-                Inspect normalized Shopify output
-              </h2>
-            </div>
-            <p className="text-sm text-muted">{decision.reason}</p>
-          </div>
-
-          <form method="get" action="/dashboard" className="mt-6 grid gap-4 md:grid-cols-[1fr_1fr_auto]">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-foreground">Preview mode</span>
-              <select
-                name="previewMode"
-                defaultValue={previewMode ?? "delta"}
-                className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-              >
-                <option value="delta">Delta preview</option>
-                <option value="full">Full preview</option>
-              </select>
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-foreground">Rows</span>
-              <input
-                name="limit"
-                type="number"
-                min={1}
-                max={25}
-                defaultValue={previewLimit}
-                className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-              />
-            </label>
-
-            <div className="flex items-end">
-              <button
-                type="submit"
-                className="w-full rounded-full bg-[#1f1711] px-5 py-3 text-sm font-semibold text-[#f9f2e7]"
-              >
-                Run preview
-              </button>
-            </div>
-          </form>
-
-          {previewResult ? (
-            <div className="mt-6 grid gap-5">
-              <div className="grid gap-4 md:grid-cols-4">
-                <div className="rounded-2xl border border-line bg-white/65 p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                    Products fetched
-                  </p>
-                  <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                    {previewResult.stats.productsFetched}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-line bg-white/65 p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                    Records prepared
-                  </p>
-                  <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                    {previewResult.stats.recordsPrepared}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-line bg-white/65 p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                    Excluded
-                  </p>
-                  <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                    {previewResult.stats.excluded}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-line bg-white/65 p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                    Query
-                  </p>
-                  <p className="mt-3 text-sm leading-7 text-muted">
-                    {previewResult.query}
-                  </p>
-                </div>
-              </div>
-
-              {Object.keys(previewResult.exclusions).length ? (
-                <div className="rounded-2xl border border-line bg-white/65 p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                    Exclusion reasons
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {Object.entries(previewResult.exclusions).map(([reason, count]) => (
-                      <span
-                        key={reason}
-                        className="rounded-full border border-line bg-panel-strong px-3 py-2 text-xs font-mono uppercase tracking-[0.18em] text-accent-strong"
-                      >
-                        {reason}: {count}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-left text-sm">
-                    <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
-                      <tr>
-                        <th className="px-4 py-3">Image</th>
-                        <th className="px-4 py-3">Title</th>
-                        <th className="px-4 py-3">Price</th>
-                        <th className="px-4 py-3">Availability</th>
-                        <th className="px-4 py-3">Labels</th>
-                        <th className="px-4 py-3">Shipping</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewResult.preview.map((record) => (
-                        <tr key={record.id} className="border-b border-line/70 align-top last:border-b-0">
-                          <td className="px-4 py-4">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={record.image_link}
-                              alt={record.title}
-                              className="h-20 w-20 rounded-2xl border border-line object-cover"
-                            />
-                          </td>
-                          <td className="px-4 py-4">
-                            <p className="font-semibold text-foreground">{record.title}</p>
-                            <p className="mt-2 text-xs font-mono uppercase tracking-[0.16em] text-muted">
-                              {record.id}
-                            </p>
-                            <p className="mt-3 max-w-md leading-7 text-muted">
-                              {record.description}
-                            </p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <p className="font-semibold text-foreground">{record.price}</p>
-                            <p className="mt-2 text-muted">
-                              {record.sale_price ? `Sale: ${record.sale_price}` : "No sale price"}
-                            </p>
-                            <p className="mt-2 text-muted">
-                              Cost: {record.cost_of_goods_sold ?? "Unknown"}
-                            </p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <p className="font-semibold text-foreground">{record.availability}</p>
-                            <p className="mt-2 text-muted">Brand: {record.brand ?? "Unknown"}</p>
-                            <p className="mt-2 text-muted">GTIN: {record.gtin ?? "None"}</p>
-                            <p className="mt-2 text-muted">MPN: {record.mpn ?? "None"}</p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <p className="text-muted">L0: {record.custom_label_0 ?? "-"}</p>
-                            <p className="mt-2 text-muted">L1: {record.custom_label_1 ?? "-"}</p>
-                            <p className="mt-2 text-muted">L2: {record.custom_label_2 ?? "-"}</p>
-                            <p className="mt-2 text-muted">L3: {record.custom_label_3 ?? "-"}</p>
-                            <p className="mt-2 text-muted">L4: {record.custom_label_4 ?? "-"}</p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <p className="text-muted">{record.shipping_weight ?? "No weight"}</p>
-                            <p className="mt-2 text-muted">{record.shipping_label}</p>
-                            <p className="mt-2 text-muted">
-                              Category: {record.google_product_category ?? "Unknown"}
-                            </p>
-                            <p className="mt-2 text-muted">
-                              Type: {record.product_type ?? "Unknown"}
-                            </p>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
-              Run a delta or full preview to see how Shopify products look after
-              the current normalization rules are applied.
-            </div>
-          )}
-        </article>
+        <PreviewPanel
+          defaultPreviewLimit={settings.previewLimit}
+          decisionReason={decision.reason}
+        />
       </section>
 
       <section className="mt-8 glass-panel rounded-[1.75rem] p-6">

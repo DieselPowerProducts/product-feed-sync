@@ -59,6 +59,14 @@ function decodeSession(value: string | undefined) {
   };
 }
 
+export function getOperatorSessionCookieName() {
+  return SESSION_COOKIE;
+}
+
+export function isValidOperatorSessionValue(value: string | undefined) {
+  return Boolean(decodeSession(value));
+}
+
 function passwordsMatch(input: string, configured: string) {
   const inputBuffer = Buffer.from(input, "utf8");
   const configuredBuffer = Buffer.from(configured, "utf8");
@@ -83,9 +91,7 @@ export async function isOperatorAuthenticated() {
   }
 
   const cookieStore = await cookies();
-  return Boolean(
-    decodeSession(cookieStore.get(SESSION_COOKIE)?.value),
-  );
+  return isValidOperatorSessionValue(cookieStore.get(SESSION_COOKIE)?.value);
 }
 
 export async function requireOperatorAuthentication() {
