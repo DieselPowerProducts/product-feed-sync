@@ -17,7 +17,7 @@ const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
 const DEFAULT_PREVIEW_LIMIT = 5;
 const DETAIL_BATCH_SIZE = 5;
-const DETAIL_VARIANT_LIMIT = 25;
+const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
 const DETAIL_MEDIA_LIMIT = 5;
 const DETAIL_METAFIELD_LIMIT = 20;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
@@ -66,7 +66,7 @@ const SHOPIFY_PRODUCT_SCAN_QUERY = `
 `;
 
 const SHOPIFY_PRODUCT_DETAILS_QUERY = `
-  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!, $variantLimit: Int!) {
+  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!) {
     nodes(ids: $ids) {
       ... on Product {
         id
@@ -113,36 +113,47 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
             }
           }
         }
-        variants(first: $variantLimit) {
-          edges {
-            node {
-              id
-              legacyResourceId
-              title
-              sku
-              barcode
-              price
-              compareAtPrice
-              inventoryPolicy
-              inventoryQuantity
-              availableForSale
-              googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
-                value
-              }
-              image {
-                url
-              }
-              inventoryItem {
-                measurement {
-                  weight {
-                    value
-                    unit
-                  }
+      }
+    }
+  }
+`;
+
+const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
+  query FeedProductVariants($productId: ID!, $first: Int!, $after: String) {
+    product(id: $productId) {
+      variants(first: $first, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        edges {
+          node {
+            id
+            legacyResourceId
+            title
+            sku
+            barcode
+            price
+            compareAtPrice
+            inventoryPolicy
+            inventoryQuantity
+            availableForSale
+            googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
+              value
+            }
+            image {
+              url
+            }
+            inventoryItem {
+              measurement {
+                weight {
+                  value
+                  unit
                 }
-                unitCost {
-                  amount
-                  currencyCode
-                }
+              }
+              unitCost {
+                amount
+                currencyCode
               }
             }
           }
@@ -362,6 +373,12 @@ interface ShopifyFeedProductsPayload {
 
 interface ShopifyProductDetailsPayload {
   nodes?: Array<ShopifyProductNode | null>;
+}
+
+interface ShopifyProductVariantsPayload {
+  product?: {
+    variants?: ShopifyConnection<ShopifyVariantNode>;
+  } | null;
 }
 
 interface ShopifyProductsCountPayload {
@@ -906,6 +923,48 @@ function buildPreviewRecord(params: {
   };
 }
 
+async function fetchAllProductVariants(params: {
+  shop: string;
+  accessToken: string;
+  productId: string;
+}) {
+  const variants: ShopifyVariantNode[] = [];
+  let cursor: string | null = null;
+
+  while (true) {
+    const payload: ShopifyProductVariantsPayload =
+      await runShopifyAdminGraphql<ShopifyProductVariantsPayload>({
+        shop: params.shop,
+        accessToken: params.accessToken,
+        query: SHOPIFY_PRODUCT_VARIANTS_QUERY,
+        variables: {
+          productId: params.productId,
+          first: DETAIL_VARIANT_PAGE_SIZE,
+          after: cursor,
+        },
+      });
+
+    const page = connectionNodes<ShopifyVariantNode>(payload.product?.variants);
+
+    if (page.length === 0) {
+      break;
+    }
+
+    variants.push(...page);
+
+    const nextCursor: string | null =
+      payload.product?.variants?.pageInfo?.endCursor ?? null;
+
+    if (!payload.product?.variants?.pageInfo?.hasNextPage || !nextCursor) {
+      break;
+    }
+
+    cursor = nextCursor;
+  }
+
+  return variants;
+}
+
 async function buildDryRunPreview(params: {
   mode: Exclude<SyncMode, "idle">;
   previewLimit: number;
@@ -1039,7 +1098,6 @@ async function buildDryRunPreview(params: {
             ids: batchIds,
             mediaLimit: DETAIL_MEDIA_LIMIT,
             metafieldLimit: DETAIL_METAFIELD_LIMIT,
-            variantLimit: DETAIL_VARIANT_LIMIT,
           },
         });
 
@@ -1051,8 +1109,13 @@ async function buildDryRunPreview(params: {
       for (const product of detailedProducts) {
         const productMetafields = collectMetafieldLookup(product.metafields);
         const productMediaUrls = collectMediaUrls(product);
+        const variants = await fetchAllProductVariants({
+          shop,
+          accessToken: token.accessToken,
+          productId: product.id,
+        });
 
-        for (const variant of connectionNodes<ShopifyVariantNode>(product.variants)) {
+        for (const variant of variants) {
           variantsConsidered += 1;
 
           const record = buildPreviewRecord({
@@ -1292,7 +1355,7 @@ export async function runSync(
     const notes = [
       "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
       "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
-      `Product details are hydrated in batches of ${DETAIL_BATCH_SIZE} products with up to ${DETAIL_VARIANT_LIMIT} variants per product to stay under Shopify's query cost limit.`,
+      `Product core details are hydrated in batches of ${DETAIL_BATCH_SIZE} products, and each product's variants are paged separately in batches of up to ${DETAIL_VARIANT_PAGE_SIZE}.`,
       "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
     ];
 
