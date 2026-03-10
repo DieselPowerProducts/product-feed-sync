@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { env, getConfigurationStatus } from "@/lib/env";
+import { getConfigurationStatus } from "@/lib/env";
+import { getOperatorStoreStatus, getSyncSettings } from "@/lib/operator-store";
 import {
   getRuntimeShopifyConnection,
   getShopifyConfigurationStatus,
@@ -11,6 +12,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const now = new Date();
+  const settings = await getSyncSettings();
   const shopifyConnection = await getRuntimeShopifyConnection();
 
   return NextResponse.json({
@@ -19,18 +21,21 @@ export async function GET() {
     timestamp: now.toISOString(),
     cadence: {
       cronScheduleUtc: "0 9 * * *",
-      anchorDate: env.syncAnchorDate,
-      deltaIntervalDays: env.deltaIntervalDays,
-      fullIntervalDays: env.fullIntervalDays,
-      defaultDryRun: env.defaultDryRun,
+      anchorDate: settings.anchorDate,
+      deltaIntervalDays: settings.deltaIntervalDays,
+      fullIntervalDays: settings.fullIntervalDays,
+      lookbackDays: settings.lookbackDays,
+      defaultDryRun: settings.defaultDryRun,
+      previewLimit: settings.previewLimit,
     },
     configuration: getConfigurationStatus(),
+    storage: getOperatorStoreStatus(),
     integrations: {
       shopify: {
         ...getShopifyConfigurationStatus(),
         connection: shopifyConnection,
       },
     },
-    nextDecision: decideSyncMode(now),
+    nextDecision: decideSyncMode(now, settings),
   });
 }

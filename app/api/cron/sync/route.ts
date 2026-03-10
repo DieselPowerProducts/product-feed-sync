@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { env, isAuthorizedCronRequest } from "@/lib/env";
+import { isAuthorizedCronRequest } from "@/lib/env";
+import { getSyncSettings } from "@/lib/operator-store";
 import { decideSyncMode, runSync } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
@@ -17,20 +18,22 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const decision = decideSyncMode();
+  const settings = await getSyncSettings();
+  const decision = decideSyncMode(new Date(), settings);
 
   if (decision.mode === "idle") {
     return NextResponse.json({
       ok: true,
       skipped: true,
-      dryRun: env.defaultDryRun,
+      dryRun: settings.defaultDryRun,
       decision,
     });
   }
 
   const result = await runSync(decision.mode, {
     trigger: "cron",
-    dryRun: env.defaultDryRun,
+    dryRun: settings.defaultDryRun,
+    settings,
   });
 
   return NextResponse.json(

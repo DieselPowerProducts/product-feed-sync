@@ -1,5 +1,11 @@
 import { env, getConfigurationStatus } from "@/lib/env";
 import {
+  appendSyncHistory,
+  getSyncSettings,
+  type SyncHistoryEntry,
+  type SyncSettings,
+} from "@/lib/operator-store";
+import {
   fetchShopConnectionDetails,
   getConfiguredShopDomain,
   getRuntimeShopifyAccessToken,
@@ -128,6 +134,11 @@ export interface SyncDecision {
   anchorDate: string;
   daysSinceAnchor: number;
   reason: string;
+}
+
+export interface UpcomingSyncDates {
+  deltaDate: string;
+  fullDate: string;
 }
 
 export interface FeedPreviewRecord {
@@ -270,6 +281,18 @@ function parseAnchorDate(value: string) {
   }
 
   return parsed;
+}
+
+function getDefaultSyncSettings(): SyncSettings {
+  return {
+    anchorDate: env.syncAnchorDate,
+    deltaIntervalDays: env.deltaIntervalDays,
+    fullIntervalDays: env.fullIntervalDays,
+    defaultDryRun: env.defaultDryRun,
+    lookbackDays: env.lookbackDays,
+    previewLimit: DEFAULT_PREVIEW_LIMIT,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function toUtcDayNumber(date: Date) {
@@ -587,17 +610,24 @@ function findProductExclusionReason(product: ShopifyProductNode) {
   return null;
 }
 
-function buildSyncScope(mode: Exclude<SyncMode, "idle">, lookbackStart: string | null) {
+function buildSyncScope(
+  mode: Exclude<SyncMode, "idle">,
+  lookbackStart: string | null,
+  settings: SyncSettings,
+) {
   if (mode === "full") {
     return "Active Shopify products with online-store URLs, scanned in paginated batches of up to 250.";
   }
 
   return lookbackStart
     ? `Active Shopify products updated after ${lookbackStart}.`
-    : `Products created or updated in the last ${env.lookbackDays} day(s).`;
+    : `Products created or updated in the last ${settings.lookbackDays} day(s).`;
 }
 
-function buildSearchQuery(mode: Exclude<SyncMode, "idle">) {
+function buildSearchQuery(
+  mode: Exclude<SyncMode, "idle">,
+  settings: SyncSettings,
+) {
   if (mode === "full") {
     return {
       query: "status:active",
@@ -605,7 +635,7 @@ function buildSearchQuery(mode: Exclude<SyncMode, "idle">) {
     };
   }
 
-  const lookbackStart = new Date(Date.now() - env.lookbackDays * MS_PER_DAY);
+  const lookbackStart = new Date(Date.now() - settings.lookbackDays * MS_PER_DAY);
 
   return {
     query: `status:active updated_at:>'${lookbackStart.toISOString()}'`,
@@ -744,6 +774,7 @@ function buildPreviewRecord(params: {
 async function buildDryRunPreview(params: {
   mode: Exclude<SyncMode, "idle">;
   previewLimit: number;
+  settings: SyncSettings;
 }) {
   const shop = getConfiguredShopDomain();
 
@@ -766,7 +797,7 @@ async function buildDryRunPreview(params: {
   const storefrontBaseUrl = connection.connected
     ? connection.shop?.primaryDomainUrl ?? null
     : null;
-  const search = buildSearchQuery(params.mode);
+  const search = buildSearchQuery(params.mode, params.settings);
   const preview: FeedPreviewRecord[] = [];
   const exclusions: Record<string, number> = {};
   let cursor: string | null = null;
@@ -857,28 +888,53 @@ async function buildDryRunPreview(params: {
   };
 }
 
-export function decideSyncMode(now = new Date()): SyncDecision {
-  const anchorDate = parseAnchorDate(env.syncAnchorDate);
+function formatDateOnly(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * MS_PER_DAY);
+}
+
+function getDaysUntilNextRun(
+  now: Date,
+  anchorDate: Date,
+  intervalDays: number,
+) {
+  const daysSinceAnchor = Math.max(
+    0,
+    toUtcDayNumber(now) - toUtcDayNumber(anchorDate),
+  );
+  const remainder = daysSinceAnchor % intervalDays;
+
+  return remainder === 0 ? 0 : intervalDays - remainder;
+}
+
+export function decideSyncMode(
+  now = new Date(),
+  settings: SyncSettings = getDefaultSyncSettings(),
+): SyncDecision {
+  const anchorDate = parseAnchorDate(settings.anchorDate);
   const daysSinceAnchor = Math.max(
     0,
     toUtcDayNumber(now) - toUtcDayNumber(anchorDate),
   );
 
-  if (daysSinceAnchor % env.fullIntervalDays === 0) {
+  if (daysSinceAnchor % settings.fullIntervalDays === 0) {
     return {
       mode: "full",
       anchorDate: anchorDate.toISOString().slice(0, 10),
       daysSinceAnchor,
-      reason: `Full refresh is due every ${env.fullIntervalDays} days.`,
+      reason: `Full refresh is due every ${settings.fullIntervalDays} days.`,
     };
   }
 
-  if (daysSinceAnchor % env.deltaIntervalDays === 0) {
+  if (daysSinceAnchor % settings.deltaIntervalDays === 0) {
     return {
       mode: "delta",
       anchorDate: anchorDate.toISOString().slice(0, 10),
       daysSinceAnchor,
-      reason: `Delta sync is due every ${env.deltaIntervalDays} days.`,
+      reason: `Delta sync is due every ${settings.deltaIntervalDays} days.`,
     };
   }
 
@@ -890,23 +946,66 @@ export function decideSyncMode(now = new Date()): SyncDecision {
   };
 }
 
+export function getUpcomingSyncDates(
+  now = new Date(),
+  settings: SyncSettings = getDefaultSyncSettings(),
+): UpcomingSyncDates {
+  const anchorDate = parseAnchorDate(settings.anchorDate);
+  const todayUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+
+  return {
+    deltaDate: formatDateOnly(
+      addDays(todayUtc, getDaysUntilNextRun(now, anchorDate, settings.deltaIntervalDays)),
+    ),
+    fullDate: formatDateOnly(
+      addDays(todayUtc, getDaysUntilNextRun(now, anchorDate, settings.fullIntervalDays)),
+    ),
+  };
+}
+
+function toHistoryEntry(result: SyncRunResult): SyncHistoryEntry {
+  return {
+    id: `${result.mode}-${result.startedAt}`,
+    startedAt: result.startedAt,
+    finishedAt: result.finishedAt,
+    trigger: result.trigger,
+    mode: result.mode,
+    dryRun: result.dryRun,
+    ok: result.ok,
+    scope: result.scope,
+    query: result.query,
+    lookbackStart: result.lookbackStart,
+    notes: result.notes.slice(0, 8),
+    stats: result.stats,
+  };
+}
+
 export async function runSync(
   mode: Exclude<SyncMode, "idle">,
   options: {
     trigger: "cron" | "manual";
     dryRun?: boolean;
     previewLimit?: number;
+    persistHistory?: boolean;
+    settings?: SyncSettings;
   },
 ): Promise<SyncRunResult> {
+  const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
-  const dryRun = options.dryRun ?? env.defaultDryRun;
-  const previewLimit = Math.max(1, options.previewLimit ?? DEFAULT_PREVIEW_LIMIT);
+  const dryRun = options.dryRun ?? settings.defaultDryRun;
+  const previewLimit = Math.max(
+    1,
+    Math.min(25, options.previewLimit ?? settings.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
+  );
   const configuration = getConfigurationStatus();
 
   try {
     const previewRun = await buildDryRunPreview({
       mode,
       previewLimit,
+      settings,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
       (sum, count) => sum + count,
@@ -934,12 +1033,12 @@ export async function runSync(
       );
     }
 
-    return {
+    const result = {
       ok: true,
       trigger: options.trigger,
       mode,
       dryRun,
-      scope: buildSyncScope(mode, previewRun.lookbackStart),
+      scope: buildSyncScope(mode, previewRun.lookbackStart, settings),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -958,17 +1057,24 @@ export async function runSync(
       },
       exclusions: previewRun.exclusions,
       preview: previewRun.preview,
-    };
+    } satisfies SyncRunResult;
+
+    if (options.persistHistory ?? true) {
+      await appendSyncHistory(toHistoryEntry(result));
+    }
+
+    return result;
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown sync execution error.";
+    const search = buildSearchQuery(mode, settings);
 
-    return {
+    const result = {
       ok: false,
       trigger: options.trigger,
       mode,
       dryRun,
-      scope: buildSyncScope(mode, null),
+      scope: buildSyncScope(mode, null, settings),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -976,8 +1082,8 @@ export async function runSync(
         `Shopify preview fetch failed: ${message}`,
         "The current code only supports read-only Shopify dry runs. No Google writes were attempted.",
       ],
-      query: buildSearchQuery(mode).query,
-      lookbackStart: buildSearchQuery(mode).lookbackStart,
+      query: search.query,
+      lookbackStart: search.lookbackStart,
       storefrontBaseUrl: null,
       stats: {
         pageSize: SHOPIFY_PAGE_SIZE,
@@ -990,6 +1096,12 @@ export async function runSync(
       },
       exclusions: {},
       preview: [],
-    };
+    } satisfies SyncRunResult;
+
+    if (options.persistHistory ?? true) {
+      await appendSyncHistory(toHistoryEntry(result));
+    }
+
+    return result;
   }
 }
