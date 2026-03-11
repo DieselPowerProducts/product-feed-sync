@@ -1044,6 +1044,7 @@ async function buildDryRunPreview(params: {
   let cursor: string | null = null;
   let productsFetched = 0;
   let variantsConsidered = 0;
+  let recordsPrepared = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
   let progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
@@ -1194,6 +1195,8 @@ async function buildDryRunPreview(params: {
             continue;
           }
 
+          recordsPrepared += 1;
+
           if (preview.length < params.artifactSampleLimit) {
             preview.push(record);
           }
@@ -1271,6 +1274,7 @@ async function buildDryRunPreview(params: {
     totalProducts,
     productsFetched,
     variantsConsidered,
+    recordsPrepared,
   };
 }
 
@@ -1402,7 +1406,7 @@ export async function runSync(
   const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
   const dryRun = options.dryRun ?? settings.defaultDryRun;
-  const exhaustive = options.exhaustive ?? false;
+  const exhaustive = options.exhaustive ?? (options.trigger === "cron" || mode === "full");
   const previewLimit = Math.max(
     1,
     Math.min(25, options.previewLimit ?? settings.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
@@ -1477,7 +1481,7 @@ export async function runSync(
         totalProducts: previewRun.totalProducts,
         productsFetched: previewRun.productsFetched,
         variantsConsidered: previewRun.variantsConsidered,
-        recordsPrepared: previewRun.preview.length,
+        recordsPrepared: previewRun.recordsPrepared,
         excluded,
         previewLimit,
       },
