@@ -287,7 +287,6 @@ export function PreviewPanel(props: {
 }) {
   const [mode, setMode] = useState<"delta" | "full">("delta");
   const [limit, setLimit] = useState(String(props.defaultPreviewLimit));
-  const [exhaustive, setExhaustive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PreviewResult | null>(null);
@@ -430,6 +429,7 @@ export function PreviewPanel(props: {
     setProgress(null);
     setResult(null);
 
+    const exhaustive = mode === "full";
     const source = new EventSource(
       `/api/dashboard/preview-stream?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
     );
@@ -537,12 +537,7 @@ export function PreviewPanel(props: {
           <select
             value={mode}
             onChange={(event) => {
-              const nextMode = event.target.value as "delta" | "full";
-              setMode(nextMode);
-
-              if (nextMode === "delta") {
-                setExhaustive(false);
-              }
+              setMode(event.target.value as "delta" | "full");
             }}
             className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
           >
@@ -573,7 +568,7 @@ export function PreviewPanel(props: {
             {isLoading ? (
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f9f2e7] border-t-transparent" />
-                {exhaustive ? "Scanning catalog" : "Loading preview"}
+                {mode === "full" ? "Scanning catalog" : "Loading preview"}
               </>
             ) : (
               "Run preview"
@@ -581,24 +576,6 @@ export function PreviewPanel(props: {
           </button>
         </div>
       </div>
-
-      <label
-        className={`mt-4 flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm ${mode === "delta" ? "opacity-70" : ""}`}
-      >
-        <input
-          type="checkbox"
-          checked={exhaustive}
-          onChange={(event) => setExhaustive(event.target.checked)}
-          disabled={mode === "delta"}
-          className="h-4 w-4 accent-[var(--accent)]"
-        />
-        Exhaustive scan
-        <span className="text-muted">
-          {mode === "delta"
-            ? "Only available for full preview runs."
-            : "Walk all matching catalog pages instead of stopping once enough preview rows have been found."}
-        </span>
-      </label>
 
       <div className="mt-3">
         <div className="h-3 overflow-hidden rounded-full border border-line bg-white/60">
