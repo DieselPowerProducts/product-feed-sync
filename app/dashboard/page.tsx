@@ -341,6 +341,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           {entry.ok ? "success" : "failed"}
                         </p>
                         <p className="mt-2 text-muted">{entry.notes[0] ?? "No notes"}</p>
+                        {entry.artifactId ? (
+                          <Link
+                            href={`/dashboard/runs/${entry.artifactId}`}
+                            className="mt-3 inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                          >
+                            View sample
+                          </Link>
+                        ) : null}
                       </td>
                       <td className="px-4 py-4 text-muted">
                         <p>Products: {entry.stats.productsFetched}</p>

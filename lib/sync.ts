@@ -2,6 +2,7 @@ import { env, getConfigurationStatus } from "@/lib/env";
 import {
   appendSyncHistory,
   getSyncSettings,
+  writeRunArtifact,
   type SyncHistoryEntry,
   type SyncSettings,
 } from "@/lib/operator-store";
@@ -16,6 +17,7 @@ const MS_PER_DAY = 86_400_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
 const DEFAULT_PREVIEW_LIMIT = 5;
+const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
 const DETAIL_BATCH_SIZE = 5;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
 const DETAIL_MEDIA_LIMIT = 5;
@@ -228,6 +230,35 @@ export interface FeedPreviewRecord {
   };
 }
 
+export interface ExcludedPreviewSample {
+  reason: string;
+  productId: string;
+  variantId: string | null;
+  offerId: string | null;
+  handle: string;
+  title: string;
+  variantTitle: string | null;
+  sku: string | null;
+}
+
+export interface SyncRunArtifact {
+  id: string;
+  startedAt: string;
+  finishedAt: string;
+  trigger: "cron" | "manual";
+  mode: Exclude<SyncMode, "idle">;
+  dryRun: boolean;
+  exhaustive: boolean;
+  ok: boolean;
+  scope: string;
+  query: string;
+  lookbackStart: string | null;
+  notes: string[];
+  stats: SyncRunResult["stats"];
+  includedSample: FeedPreviewRecord[];
+  excludedSample: ExcludedPreviewSample[];
+}
+
 export interface SyncRunResult {
   ok: boolean;
   trigger: "cron" | "manual";
@@ -433,6 +464,17 @@ function chunkArray<T>(items: T[], size: number) {
 
 function incrementCounter(counter: Record<string, number>, key: string) {
   counter[key] = (counter[key] ?? 0) + 1;
+}
+
+function collectExcludedSample(
+  samples: ExcludedPreviewSample[],
+  sample: ExcludedPreviewSample,
+) {
+  if (samples.length >= RUN_ARTIFACT_SAMPLE_LIMIT) {
+    return;
+  }
+
+  samples.push(sample);
 }
 
 function resolveLegacyId(legacyId: string | null, gid: string) {
@@ -968,6 +1010,7 @@ async function fetchAllProductVariants(params: {
 async function buildDryRunPreview(params: {
   mode: Exclude<SyncMode, "idle">;
   previewLimit: number;
+  artifactSampleLimit: number;
   settings: SyncSettings;
   exhaustive: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
@@ -995,6 +1038,7 @@ async function buildDryRunPreview(params: {
     : null;
   const search = buildSearchQuery(params.mode, params.settings);
   const preview: FeedPreviewRecord[] = [];
+  const excludedSamples: ExcludedPreviewSample[] = [];
   const exclusions: Record<string, number> = {};
   let totalProducts: number | null = null;
   let cursor: string | null = null;
@@ -1045,9 +1089,7 @@ async function buildDryRunPreview(params: {
     });
   }
 
-  while (
-    params.exhaustive || preview.length < params.previewLimit
-  ) {
+  while (params.exhaustive || preview.length < params.artifactSampleLimit) {
     const payload: ShopifyFeedProductsPayload =
       await runShopifyAdminGraphql<ShopifyFeedProductsPayload>({
         shop,
@@ -1076,13 +1118,23 @@ async function buildDryRunPreview(params: {
 
       if (exclusionReason) {
         incrementCounter(exclusions, exclusionReason);
+        collectExcludedSample(excludedSamples, {
+          reason: exclusionReason,
+          productId: resolveLegacyId(product.legacyResourceId, product.id),
+          variantId: null,
+          offerId: null,
+          handle: product.handle,
+          title: product.title,
+          variantTitle: null,
+          sku: null,
+        });
         continue;
       }
 
       candidateIds.push(product.id);
     }
 
-    const shouldHydrateDetails = preview.length < params.previewLimit;
+    const shouldHydrateDetails = preview.length < params.artifactSampleLimit;
 
     for (const batchIds of chunkArray(candidateIds, DETAIL_BATCH_SIZE)) {
       if (!shouldHydrateDetails) {
@@ -1107,6 +1159,7 @@ async function buildDryRunPreview(params: {
         ) ?? [];
 
       for (const product of detailedProducts) {
+        const productId = resolveLegacyId(product.legacyResourceId, product.id);
         const productMetafields = collectMetafieldLookup(product.metafields);
         const productMediaUrls = collectMediaUrls(product);
         const variants = await fetchAllProductVariants({
@@ -1128,24 +1181,34 @@ async function buildDryRunPreview(params: {
 
           if ("excluded" in record) {
             incrementCounter(exclusions, record.excluded);
+            collectExcludedSample(excludedSamples, {
+              reason: record.excluded,
+              productId: productId,
+              variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
+              offerId: `shopify_ZZ_${productId}_${resolveLegacyId(variant.legacyResourceId, variant.id)}`,
+              handle: product.handle,
+              title: product.title,
+              variantTitle: variant.title,
+              sku: variant.sku ?? null,
+            });
             continue;
           }
 
-          if (preview.length < params.previewLimit) {
+          if (preview.length < params.artifactSampleLimit) {
             preview.push(record);
           }
 
-          if (!params.exhaustive && preview.length >= params.previewLimit) {
+          if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
             break;
           }
         }
 
-        if (!params.exhaustive && preview.length >= params.previewLimit) {
+        if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
           break;
         }
       }
 
-      if (!params.exhaustive && preview.length >= params.previewLimit) {
+      if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
         break;
       }
     }
@@ -1199,7 +1262,9 @@ async function buildDryRunPreview(params: {
     query: search.query,
     lookbackStart: search.lookbackStart,
     storefrontBaseUrl,
-    preview,
+    preview: preview.slice(0, params.previewLimit),
+    includedSamples: preview.slice(0, params.artifactSampleLimit),
+    excludedSamples,
     exclusions,
     pagesScanned,
     scanCompleted,
@@ -1301,7 +1366,10 @@ export function getUpcomingSyncDates(
   };
 }
 
-function toHistoryEntry(result: SyncRunResult): SyncHistoryEntry {
+function toHistoryEntry(
+  result: SyncRunResult,
+  artifactId: string | null,
+): SyncHistoryEntry {
   return {
     id: `${result.mode}-${result.startedAt}`,
     startedAt: result.startedAt,
@@ -1313,6 +1381,7 @@ function toHistoryEntry(result: SyncRunResult): SyncHistoryEntry {
     scope: `${result.scope}${result.exhaustive ? " [exhaustive]" : ""}`,
     query: result.query,
     lookbackStart: result.lookbackStart,
+    artifactId,
     notes: result.notes.slice(0, 8),
     stats: result.stats,
   };
@@ -1338,12 +1407,15 @@ export async function runSync(
     1,
     Math.min(25, options.previewLimit ?? settings.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
   );
+  const artifactSampleLimit =
+    options.persistHistory ?? true ? RUN_ARTIFACT_SAMPLE_LIMIT : previewLimit;
   const configuration = getConfigurationStatus();
 
   try {
     const previewRun = await buildDryRunPreview({
       mode,
       previewLimit,
+      artifactSampleLimit,
       settings,
       exhaustive,
       onProgress: options.onProgress,
@@ -1414,7 +1486,27 @@ export async function runSync(
     } satisfies SyncRunResult;
 
     if (options.persistHistory ?? true) {
-      await appendSyncHistory(toHistoryEntry(result));
+      const artifactId = result.startedAt.replaceAll(":", "-");
+      const artifact: SyncRunArtifact = {
+        id: artifactId,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        trigger: result.trigger,
+        mode: result.mode,
+        dryRun: result.dryRun,
+        exhaustive: result.exhaustive,
+        ok: result.ok,
+        scope: result.scope,
+        query: result.query,
+        lookbackStart: result.lookbackStart,
+        notes: result.notes,
+        stats: result.stats,
+        includedSample: previewRun.includedSamples,
+        excludedSample: previewRun.excludedSamples,
+      };
+
+      await writeRunArtifact(artifactId, artifact);
+      await appendSyncHistory(toHistoryEntry(result, artifactId));
     }
 
     return result;
@@ -1456,7 +1548,27 @@ export async function runSync(
     } satisfies SyncRunResult;
 
     if (options.persistHistory ?? true) {
-      await appendSyncHistory(toHistoryEntry(result));
+      const artifactId = result.startedAt.replaceAll(":", "-");
+      const artifact: SyncRunArtifact = {
+        id: artifactId,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        trigger: result.trigger,
+        mode: result.mode,
+        dryRun: result.dryRun,
+        exhaustive: result.exhaustive,
+        ok: result.ok,
+        scope: result.scope,
+        query: result.query,
+        lookbackStart: result.lookbackStart,
+        notes: result.notes,
+        stats: result.stats,
+        includedSample: [],
+        excludedSample: [],
+      };
+
+      await writeRunArtifact(artifactId, artifact);
+      await appendSyncHistory(toHistoryEntry(result, artifactId));
     }
 
     return result;

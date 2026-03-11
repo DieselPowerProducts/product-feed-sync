@@ -4,10 +4,16 @@ import { get, put } from "@vercel/blob";
 import { env } from "@/lib/env";
 
 const STATE_BLOB_PATH = "dpp-product-feed-sync/operator-state.json";
+const RUN_ARTIFACT_BLOB_PREFIX = "dpp-product-feed-sync/run-artifacts";
 const LOCAL_STATE_PATH = path.join(
   process.cwd(),
   ".local-state",
   "operator-state.json",
+);
+const LOCAL_RUN_ARTIFACT_DIR = path.join(
+  process.cwd(),
+  ".local-state",
+  "run-artifacts",
 );
 const HISTORY_LIMIT = 50;
 
@@ -32,10 +38,13 @@ export interface SyncHistoryEntry {
   scope: string;
   query: string;
   lookbackStart: string | null;
+  artifactId?: string | null;
   notes: string[];
   stats: {
     pageSize: number;
     pagesScanned: number;
+    scanCompleted?: boolean;
+    totalProducts?: number | null;
     productsFetched: number;
     variantsConsidered: number;
     recordsPrepared: number;
@@ -53,6 +62,7 @@ type StorageMode = "blob" | "local" | "memory";
 
 declare global {
   var __dppOperatorState: OperatorState | undefined;
+  var __dppRunArtifacts: Record<string, unknown> | undefined;
 }
 
 function readPositiveInteger(value: number, fallback: number) {
@@ -116,10 +126,19 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
     history: Array.isArray(input?.history)
       ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
           ...entry,
+          artifactId: entry.artifactId ?? null,
           notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
         }))
       : [],
   } satisfies OperatorState;
+}
+
+function getRunArtifactBlobPath(id: string) {
+  return `${RUN_ARTIFACT_BLOB_PREFIX}/${id}.json`;
+}
+
+function getLocalRunArtifactPath(id: string) {
+  return path.join(LOCAL_RUN_ARTIFACT_DIR, `${id}.json`);
 }
 
 function getStorageMode(): StorageMode {
@@ -153,6 +172,29 @@ async function writeBlobState(state: OperatorState) {
   });
 }
 
+async function readBlobArtifact<T>(id: string) {
+  const result = await get(getRunArtifactBlobPath(id), {
+    access: "private",
+    useCache: false,
+  });
+
+  if (!result || result.statusCode !== 200) {
+    return null;
+  }
+
+  const text = await new Response(result.stream).text();
+  return JSON.parse(text) as T;
+}
+
+async function writeBlobArtifact(id: string, artifact: unknown) {
+  await put(getRunArtifactBlobPath(id), JSON.stringify(artifact, null, 2), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
 async function readLocalState() {
   try {
     const raw = await readFile(LOCAL_STATE_PATH, "utf8");
@@ -167,12 +209,42 @@ async function writeLocalState(state: OperatorState) {
   await writeFile(LOCAL_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
 }
 
+async function readLocalArtifact<T>(id: string) {
+  try {
+    const raw = await readFile(getLocalRunArtifactPath(id), "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLocalArtifact(id: string, artifact: unknown) {
+  await mkdir(LOCAL_RUN_ARTIFACT_DIR, { recursive: true });
+  await writeFile(
+    getLocalRunArtifactPath(id),
+    JSON.stringify(artifact, null, 2),
+    "utf8",
+  );
+}
+
 async function readMemoryState() {
   return globalThis.__dppOperatorState ?? defaultState();
 }
 
 async function writeMemoryState(state: OperatorState) {
   globalThis.__dppOperatorState = state;
+}
+
+async function readMemoryArtifact<T>(id: string) {
+  return (globalThis.__dppRunArtifacts?.[id] as T | undefined) ?? null;
+}
+
+async function writeMemoryArtifact(id: string, artifact: unknown) {
+  if (!globalThis.__dppRunArtifacts) {
+    globalThis.__dppRunArtifacts = {};
+  }
+
+  globalThis.__dppRunArtifacts[id] = artifact;
 }
 
 async function readState() {
@@ -252,4 +324,34 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
     ...state,
     history: [entry, ...state.history].slice(0, HISTORY_LIMIT),
   });
+}
+
+export async function writeRunArtifact(id: string, artifact: unknown) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    await writeBlobArtifact(id, artifact);
+    return;
+  }
+
+  if (mode === "local") {
+    await writeLocalArtifact(id, artifact);
+    return;
+  }
+
+  await writeMemoryArtifact(id, artifact);
+}
+
+export async function readRunArtifact<T = unknown>(id: string) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    return readBlobArtifact<T>(id);
+  }
+
+  if (mode === "local") {
+    return readLocalArtifact<T>(id);
+  }
+
+  return readMemoryArtifact<T>(id);
 }
