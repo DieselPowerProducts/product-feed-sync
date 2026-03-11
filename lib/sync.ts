@@ -16,6 +16,8 @@ import {
 const MS_PER_DAY = 86_400_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
+const CRON_HOUR_UTC = 9;
+const CRON_MINUTE_UTC = 0;
 const DEFAULT_PREVIEW_LIMIT = 5;
 const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
 const DETAIL_BATCH_SIZE = 5;
@@ -1300,13 +1302,33 @@ function getDaysUntilNextRun(
   return remainder === 0 ? 0 : intervalDays - remainder;
 }
 
-function getDaysUntilFollowingRun(
+function getCronRunTimeForUtcDate(date: Date) {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      CRON_HOUR_UTC,
+      CRON_MINUTE_UTC,
+      0,
+      0,
+    ),
+  );
+}
+
+function getDaysUntilDisplayedNextRun(
   now: Date,
   anchorDate: Date,
   intervalDays: number,
 ) {
   const daysUntilNextRun = getDaysUntilNextRun(now, anchorDate, intervalDays);
-  return daysUntilNextRun === 0 ? intervalDays : daysUntilNextRun;
+
+  if (daysUntilNextRun !== 0) {
+    return daysUntilNextRun;
+  }
+
+  const todayCronTime = getCronRunTimeForUtcDate(now);
+  return now.getTime() < todayCronTime.getTime() ? 0 : intervalDays;
 }
 
 export function decideSyncMode(
@@ -1358,13 +1380,13 @@ export function getUpcomingSyncDates(
     deltaDate: formatDateOnly(
       addDays(
         todayUtc,
-        getDaysUntilFollowingRun(now, anchorDate, settings.deltaIntervalDays),
+        getDaysUntilDisplayedNextRun(now, anchorDate, settings.deltaIntervalDays),
       ),
     ),
     fullDate: formatDateOnly(
       addDays(
         todayUtc,
-        getDaysUntilFollowingRun(now, anchorDate, settings.fullIntervalDays),
+        getDaysUntilDisplayedNextRun(now, anchorDate, settings.fullIntervalDays),
       ),
     ),
   };
