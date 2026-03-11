@@ -337,9 +337,17 @@ export function PreviewPanel(props: {
 
       const rect = viewport.getBoundingClientRect();
       const bottomPadding = window.innerWidth >= 1024 ? 32 : 20;
+      const topClamp = window.innerWidth >= 1024 ? 148 : 112;
+      const maxHeight = Math.max(
+        400,
+        Math.floor(window.innerHeight * (window.innerWidth >= 1024 ? 0.72 : 0.66)),
+      );
+      const availableHeight = Math.floor(
+        window.innerHeight - Math.max(rect.top, topClamp) - bottomPadding,
+      );
       const nextHeight = Math.max(
         400,
-        Math.floor(window.innerHeight - rect.top - bottomPadding),
+        Math.min(maxHeight, availableHeight),
       );
 
       setTableViewportHeight((current) =>
