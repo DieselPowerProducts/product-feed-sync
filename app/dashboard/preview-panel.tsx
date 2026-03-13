@@ -8,7 +8,9 @@ import {
 
 type PreviewResult = {
   ok: boolean;
+  mode: "delta" | "full";
   exhaustive: boolean;
+  exportArtifactId?: string | null;
   query: string;
   stats: {
     pageSize: number;
@@ -63,7 +65,7 @@ export function PreviewPanel(props: {
     setProgress(null);
     setResult(null);
 
-    const exhaustive = mode === "full";
+    const exhaustive = true;
     const source = new EventSource(
       `/api/dashboard/preview-stream?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
     );
@@ -198,7 +200,7 @@ export function PreviewPanel(props: {
             {isLoading ? (
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f9f2e7] border-t-transparent" />
-                {mode === "full" ? "Scanning catalog" : "Loading preview"}
+                {mode === "full" ? "Preparing full preview" : "Preparing delta preview"}
               </>
             ) : (
               "Run preview"
@@ -234,8 +236,8 @@ export function PreviewPanel(props: {
       <div className="mt-4 text-sm leading-7 text-muted">
         Delta preview only shows products updated inside the current lookback
         window. <strong>Preview rows</strong> only changes how many sample rows
-        are shown below. If it returns no rows, try <strong>Full preview</strong>{" "}
-        or increase the lookback days in the settings panel.
+        are shown below. Running a preview prepares the matching export from the
+        same scan, so the download uses the exact same dataset.
       </div>
 
       {error ? (
@@ -246,19 +248,21 @@ export function PreviewPanel(props: {
 
       {result ? (
         <div className="mt-6 grid gap-5">
-          <div className="flex flex-col gap-3 rounded-2xl border border-line bg-white/65 p-4 md:flex-row md:items-center md:justify-between">
-            <div className="text-sm leading-7 text-muted">
-              The table below shows only the requested sample rows. Downloading
-              the current <strong>{mode}</strong> export reruns that same mode
-              and exports <strong>all</strong> matching rows as an XLSX.
+          {result.exportArtifactId ? (
+            <div className="flex flex-col gap-3 rounded-2xl border border-line bg-white/65 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm leading-7 text-muted">
+                This preview prepared the full <strong>{result.mode}</strong>{" "}
+                export from the same scan. The table below only shows the
+                requested sample rows.
+              </div>
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}`}
+                className="inline-flex items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+              >
+                Download {result.mode === "full" ? "Full" : "Delta"} XLSX
+              </a>
             </div>
-            <a
-              href={`/api/dashboard/export/preview?mode=${mode}`}
-              className="inline-flex items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
-            >
-              Download {mode === "full" ? "Full" : "Delta"} XLSX
-            </a>
-          </div>
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-4">
             <div className="rounded-2xl border border-line bg-white/65 p-4">

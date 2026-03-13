@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 
 const STATE_BLOB_PATH = "dpp-product-feed-sync/operator-state.json";
 const RUN_ARTIFACT_BLOB_PREFIX = "dpp-product-feed-sync/run-artifacts";
+const PREVIEW_EXPORT_BLOB_PREFIX = "dpp-product-feed-sync/preview-exports";
 const LOCAL_STATE_PATH = path.join(
   process.cwd(),
   ".local-state",
@@ -14,6 +15,11 @@ const LOCAL_RUN_ARTIFACT_DIR = path.join(
   process.cwd(),
   ".local-state",
   "run-artifacts",
+);
+const LOCAL_PREVIEW_EXPORT_DIR = path.join(
+  process.cwd(),
+  ".local-state",
+  "preview-exports",
 );
 const HISTORY_LIMIT = 50;
 
@@ -133,6 +139,14 @@ function getRunArtifactBlobPath(id: string) {
 
 function getLocalRunArtifactPath(id: string) {
   return path.join(LOCAL_RUN_ARTIFACT_DIR, `${id}.json`);
+}
+
+function getPreviewExportBlobPath(id: string) {
+  return `${PREVIEW_EXPORT_BLOB_PREFIX}/${id}.json`;
+}
+
+function getLocalPreviewExportPath(id: string) {
+  return path.join(LOCAL_PREVIEW_EXPORT_DIR, `${id}.json`);
 }
 
 function getStorageMode(): StorageMode {
@@ -348,4 +362,87 @@ export async function readRunArtifact<T = unknown>(id: string) {
   }
 
   return readMemoryArtifact<T>(id);
+}
+
+async function readBlobPreviewExport<T>(id: string) {
+  const result = await get(getPreviewExportBlobPath(id), {
+    access: "private",
+    useCache: false,
+  });
+
+  if (!result || result.statusCode !== 200) {
+    return null;
+  }
+
+  const text = await new Response(result.stream).text();
+  return JSON.parse(text) as T;
+}
+
+async function writeBlobPreviewExport(id: string, artifact: unknown) {
+  await put(getPreviewExportBlobPath(id), JSON.stringify(artifact, null, 2), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
+async function readLocalPreviewExport<T>(id: string) {
+  try {
+    const raw = await readFile(getLocalPreviewExportPath(id), "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLocalPreviewExport(id: string, artifact: unknown) {
+  await mkdir(LOCAL_PREVIEW_EXPORT_DIR, { recursive: true });
+  await writeFile(
+    getLocalPreviewExportPath(id),
+    JSON.stringify(artifact, null, 2),
+    "utf8",
+  );
+}
+
+async function readMemoryPreviewExport<T>(id: string) {
+  return (globalThis.__dppRunArtifacts?.[`preview-export:${id}`] as T | undefined) ?? null;
+}
+
+async function writeMemoryPreviewExport(id: string, artifact: unknown) {
+  if (!globalThis.__dppRunArtifacts) {
+    globalThis.__dppRunArtifacts = {};
+  }
+
+  globalThis.__dppRunArtifacts[`preview-export:${id}`] = artifact;
+}
+
+export async function writePreviewExportArtifact(id: string, artifact: unknown) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    await writeBlobPreviewExport(id, artifact);
+    return;
+  }
+
+  if (mode === "local") {
+    await writeLocalPreviewExport(id, artifact);
+    return;
+  }
+
+  await writeMemoryPreviewExport(id, artifact);
+}
+
+export async function readPreviewExportArtifact<T = unknown>(id: string) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    return readBlobPreviewExport<T>(id);
+  }
+
+  if (mode === "local") {
+    return readLocalPreviewExport<T>(id);
+  }
+
+  return readMemoryPreviewExport<T>(id);
 }

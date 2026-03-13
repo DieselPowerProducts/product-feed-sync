@@ -88,6 +88,7 @@ export async function GET(request: NextRequest) {
           persistHistory: false,
           settings,
           exhaustive,
+          prepareExportArtifact: exhaustive,
           onProgress: sendProgress,
         });
 

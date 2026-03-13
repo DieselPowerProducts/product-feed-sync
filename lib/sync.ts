@@ -3,6 +3,7 @@ import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
   getSyncSettings,
+  writePreviewExportArtifact,
   writeRunArtifact,
   type SyncHistoryEntry,
   type SyncSettings,
@@ -304,6 +305,7 @@ export interface SyncRunResult {
   };
   exclusions: Record<string, number>;
   preview: FeedPreviewRecord[];
+  exportArtifactId?: string | null;
 }
 
 export interface SyncExportResult {
@@ -1586,6 +1588,7 @@ export async function runSync(
     persistHistory?: boolean;
     settings?: SyncSettings;
     exhaustive?: boolean;
+    prepareExportArtifact?: boolean;
     onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
   },
 ): Promise<SyncRunResult> {
@@ -1600,6 +1603,9 @@ export async function runSync(
   const artifactSampleLimit =
     options.persistHistory ?? true ? RUN_ARTIFACT_SAMPLE_LIMIT : previewLimit;
   const configuration = getConfigurationStatus();
+  const exportArtifactId = options.prepareExportArtifact
+    ? `${mode}-${startedAt.replaceAll(":", "-")}`
+    : null;
 
   try {
     const previewRun = await buildDryRunPreview({
@@ -1608,6 +1614,7 @@ export async function runSync(
       artifactSampleLimit,
       settings,
       exhaustive,
+      collectAllRecords: options.prepareExportArtifact,
       onProgress: options.onProgress,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
@@ -1648,7 +1655,25 @@ export async function runSync(
       },
       exclusions: previewRun.exclusions,
       preview: previewRun.preview,
+      exportArtifactId,
     } satisfies SyncRunResult;
+
+    if (exportArtifactId) {
+      await writePreviewExportArtifact(exportArtifactId, {
+        ok: true,
+        mode,
+        dryRun,
+        exhaustive,
+        startedAt,
+        finishedAt: result.finishedAt,
+        notes,
+        query: previewRun.query,
+        lookbackStart: previewRun.lookbackStart,
+        stats: result.stats,
+        exclusions: previewRun.exclusions,
+        rows: previewRun.allRecords,
+      } satisfies SyncExportResult);
+    }
 
     if (options.persistHistory ?? true) {
       const artifactId = result.startedAt.replaceAll(":", "-");
@@ -1710,6 +1735,7 @@ export async function runSync(
       },
       exclusions: {},
       preview: [],
+      exportArtifactId,
     } satisfies SyncRunResult;
 
     if (options.persistHistory ?? true) {

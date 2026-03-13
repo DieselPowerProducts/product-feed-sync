@@ -6,7 +6,8 @@ import {
   isOperatorAuthConfigured,
   isValidOperatorSessionValue,
 } from "@/lib/operator-auth";
-import { runSyncExport, type SyncMode } from "@/lib/sync";
+import { readPreviewExportArtifact } from "@/lib/operator-store";
+import { type SyncExportResult, type SyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,9 +19,8 @@ function isSupportedMode(
   return value === "delta" || value === "full";
 }
 
-function buildFilename(mode: Exclude<SyncMode, "idle">) {
-  const timestamp = new Date().toISOString().replaceAll(":", "-");
-  return `dpp-feed-${mode}-export-${timestamp}.xlsx`;
+function buildFilename(mode: Exclude<SyncMode, "idle">, startedAt: string) {
+  return `dpp-feed-${mode}-export-${startedAt.replaceAll(":", "-")}.xlsx`;
 }
 
 export async function GET(request: NextRequest) {
@@ -39,30 +39,53 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const exportId = request.nextUrl.searchParams.get("id");
   const mode = request.nextUrl.searchParams.get("mode");
+
+  if (exportId) {
+    const artifact = await readPreviewExportArtifact<SyncExportResult>(exportId);
+
+    if (!artifact) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Prepared preview export was not found. Run preview again.",
+        },
+        { status: 404 },
+      );
+    }
+
+    const workbook = buildPreviewExportWorkbook(artifact);
+
+    return new NextResponse(workbook, {
+      status: 200,
+      headers: {
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${buildFilename(
+          artifact.mode,
+          artifact.startedAt,
+        )}"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
 
   if (!isSupportedMode(mode)) {
     return NextResponse.json(
       {
         ok: false,
-        error: "Use ?mode=delta or ?mode=full.",
+        error: "Use ?id=<prepared-export-id>.",
       },
       { status: 400 },
     );
   }
 
-  const result = await runSyncExport(mode, {
-    dryRun: true,
-  });
-  const workbook = buildPreviewExportWorkbook(result);
-
-  return new NextResponse(workbook, {
-    status: 200,
-    headers: {
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${buildFilename(mode)}"`,
-      "Cache-Control": "no-store",
+  return NextResponse.json(
+    {
+      ok: false,
+      error: `Run a ${mode} preview first so the prepared export is available.`,
     },
-  });
+    { status: 400 },
+  );
 }

@@ -75,6 +75,9 @@ export async function GET(request: NextRequest) {
     persistHistory: false,
     settings,
     exhaustive: readBooleanish(request.nextUrl.searchParams.get("exhaustive")),
+    prepareExportArtifact: readBooleanish(
+      request.nextUrl.searchParams.get("exhaustive"),
+    ),
   });
 
   return NextResponse.json({
