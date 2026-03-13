@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { NextRequest } from "next/server";
 import { env, hasEnvValue } from "@/lib/env";
 
@@ -44,6 +45,100 @@ export interface ShopifyRuntimeToken {
   source: "env" | "client_credentials";
   scope?: string;
   expiresIn?: number | null;
+}
+
+export interface ShopifyGraphqlMetric {
+  operationName: string;
+  status: number;
+  durationMs: number;
+  requestedCost: number | null;
+  actualCost: number | null;
+  throttleAvailable: number | null;
+  throttleMax: number | null;
+  restoreRate: number | null;
+}
+
+export interface ShopifyGraphqlOperationSummary {
+  operationName: string;
+  calls: number;
+  totalDurationMs: number;
+  averageDurationMs: number;
+  maxDurationMs: number;
+  averageActualCost: number | null;
+  maxActualCost: number | null;
+  latestThrottleAvailable: number | null;
+  throttleMax: number | null;
+  restoreRate: number | null;
+}
+
+export interface ShopifyGraphqlDiagnosticsSummary {
+  totalRequests: number;
+  totalDurationMs: number;
+  operations: ShopifyGraphqlOperationSummary[];
+}
+
+const shopifyGraphqlMetricsStore = new AsyncLocalStorage<ShopifyGraphqlMetric[]>();
+
+function summarizeShopifyGraphqlMetrics(
+  metrics: ShopifyGraphqlMetric[],
+): ShopifyGraphqlDiagnosticsSummary {
+  const groups = new Map<string, ShopifyGraphqlMetric[]>();
+
+  for (const metric of metrics) {
+    const existing = groups.get(metric.operationName);
+
+    if (existing) {
+      existing.push(metric);
+      continue;
+    }
+
+    groups.set(metric.operationName, [metric]);
+  }
+
+  return {
+    totalRequests: metrics.length,
+    totalDurationMs: metrics.reduce((sum, metric) => sum + metric.durationMs, 0),
+    operations: Array.from(groups.entries())
+      .map(([operationName, entries]) => {
+        const totalDurationMs = entries.reduce(
+          (sum, entry) => sum + entry.durationMs,
+          0,
+        );
+        const actualCosts = entries
+          .map((entry) => entry.actualCost)
+          .filter((value): value is number => typeof value === "number");
+        const latest = entries[entries.length - 1];
+
+        return {
+          operationName,
+          calls: entries.length,
+          totalDurationMs,
+          averageDurationMs: totalDurationMs / entries.length,
+          maxDurationMs: Math.max(...entries.map((entry) => entry.durationMs)),
+          averageActualCost: actualCosts.length
+            ? actualCosts.reduce((sum, value) => sum + value, 0) /
+              actualCosts.length
+            : null,
+          maxActualCost: actualCosts.length ? Math.max(...actualCosts) : null,
+          latestThrottleAvailable: latest?.throttleAvailable ?? null,
+          throttleMax: latest?.throttleMax ?? null,
+          restoreRate: latest?.restoreRate ?? null,
+        } satisfies ShopifyGraphqlOperationSummary;
+      })
+      .sort((left, right) => right.totalDurationMs - left.totalDurationMs),
+  };
+}
+
+export async function captureShopifyGraphqlDiagnostics<T>(run: () => Promise<T>) {
+  return shopifyGraphqlMetricsStore.run([], async () => {
+    const result = await run();
+    const metrics = shopifyGraphqlMetricsStore.getStore() ?? [];
+
+    return {
+      result,
+      diagnostics: summarizeShopifyGraphqlMetrics(metrics),
+    };
+  });
 }
 
 export function getShopifyCookieNames() {
@@ -388,6 +483,21 @@ export async function runShopifyAdminGraphql<T>(params: {
     console.info(
       `[shopify-graphql] ${operationName} status=${response.status} duration_ms=${durationMs}`,
     );
+  }
+
+  const metrics = shopifyGraphqlMetricsStore.getStore();
+
+  if (metrics) {
+    metrics.push({
+      operationName,
+      status: response.status,
+      durationMs,
+      requestedCost: cost?.requestedQueryCost ?? null,
+      actualCost: cost?.actualQueryCost ?? null,
+      throttleAvailable: cost?.throttleStatus?.currentlyAvailable ?? null,
+      throttleMax: cost?.throttleStatus?.maximumAvailable ?? null,
+      restoreRate: cost?.throttleStatus?.restoreRate ?? null,
+    });
   }
 
   if (!response.ok) {

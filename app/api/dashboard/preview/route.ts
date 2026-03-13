@@ -7,6 +7,7 @@ import {
 } from "@/lib/operator-auth";
 import { getSyncSettings } from "@/lib/operator-store";
 import { DEFAULT_PREVIEW_LIMIT, runSync, type SyncMode } from "@/lib/sync";
+import { captureShopifyGraphqlDiagnostics } from "@/lib/shopify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -68,21 +69,26 @@ export async function GET(request: NextRequest) {
     request.nextUrl.searchParams.get("limit"),
     DEFAULT_PREVIEW_LIMIT,
   );
-  const result = await runSync(mode, {
-    trigger: "manual",
-    dryRun: true,
-    previewLimit: limit,
-    persistHistory: false,
-    settings,
-    exhaustive: readBooleanish(request.nextUrl.searchParams.get("exhaustive")),
-    prepareExportArtifact: readBooleanish(
-      request.nextUrl.searchParams.get("exhaustive"),
-    ),
-  });
+  const { result, diagnostics } = await captureShopifyGraphqlDiagnostics(() =>
+    runSync(mode, {
+      trigger: "manual",
+      dryRun: true,
+      previewLimit: limit,
+      persistHistory: false,
+      settings,
+      exhaustive: readBooleanish(request.nextUrl.searchParams.get("exhaustive")),
+      prepareExportArtifact: readBooleanish(
+        request.nextUrl.searchParams.get("exhaustive"),
+      ),
+    }),
+  );
 
   return NextResponse.json({
     ok: result.ok,
-    result,
+    result: {
+      ...result,
+      shopifyDiagnostics: diagnostics,
+    },
     error: result.ok ? null : result.notes[0] ?? "Preview request failed.",
   });
 }

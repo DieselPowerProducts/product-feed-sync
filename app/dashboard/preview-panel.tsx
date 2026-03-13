@@ -11,6 +11,22 @@ type PreviewResult = {
   mode: "delta" | "full";
   exhaustive: boolean;
   exportArtifactId?: string | null;
+  shopifyDiagnostics?: {
+    totalRequests: number;
+    totalDurationMs: number;
+    operations: Array<{
+      operationName: string;
+      calls: number;
+      totalDurationMs: number;
+      averageDurationMs: number;
+      maxDurationMs: number;
+      averageActualCost: number | null;
+      maxActualCost: number | null;
+      latestThrottleAvailable: number | null;
+      throttleMax: number | null;
+      restoreRate: number | null;
+    }>;
+  };
   query: string;
   stats: {
     pageSize: number;
@@ -324,6 +340,64 @@ export function PreviewPanel(props: {
               </p>
             </div>
           </div>
+
+          {result.shopifyDiagnostics?.operations.length ? (
+            <div className="rounded-2xl border border-line bg-white/65 p-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-baseline md:justify-between">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                  Shopify query timings
+                </p>
+                <p className="text-sm text-muted">
+                  {result.shopifyDiagnostics.totalRequests} requests in{" "}
+                  {Math.round(result.shopifyDiagnostics.totalDurationMs).toLocaleString()} ms
+                </p>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-line text-xs uppercase tracking-[0.18em] text-muted">
+                    <tr>
+                      <th className="px-3 py-2">Operation</th>
+                      <th className="px-3 py-2">Calls</th>
+                      <th className="px-3 py-2">Avg ms</th>
+                      <th className="px-3 py-2">Max ms</th>
+                      <th className="px-3 py-2">Avg cost</th>
+                      <th className="px-3 py-2">Throttle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.shopifyDiagnostics.operations.map((operation) => (
+                      <tr
+                        key={operation.operationName}
+                        className="border-b border-line/70 last:border-b-0"
+                      >
+                        <td className="px-3 py-3 font-mono text-xs uppercase tracking-[0.12em] text-muted">
+                          {operation.operationName}
+                        </td>
+                        <td className="px-3 py-3 text-muted">{operation.calls}</td>
+                        <td className="px-3 py-3 text-muted">
+                          {Math.round(operation.averageDurationMs).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-3 text-muted">
+                          {Math.round(operation.maxDurationMs).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-3 text-muted">
+                          {operation.averageActualCost !== null
+                            ? Math.round(operation.averageActualCost).toLocaleString()
+                            : "-"}
+                        </td>
+                        <td className="px-3 py-3 text-muted">
+                          {operation.latestThrottleAvailable !== null &&
+                          operation.throttleMax !== null
+                            ? `${operation.latestThrottleAvailable.toLocaleString()} / ${operation.throttleMax.toLocaleString()}`
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
 
           {Object.keys(result.exclusions).length ? (
             <div className="rounded-2xl border border-line bg-white/65 p-4">

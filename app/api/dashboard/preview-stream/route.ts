@@ -11,6 +11,7 @@ import {
   type SyncMode,
   type SyncProgressUpdate,
 } from "@/lib/sync";
+import { captureShopifyGraphqlDiagnostics } from "@/lib/shopify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -81,18 +82,26 @@ export async function GET(request: NextRequest) {
       };
 
       try {
-        const result = await runSync(mode, {
-          trigger: "manual",
-          dryRun: true,
-          previewLimit: limit,
-          persistHistory: false,
-          settings,
-          exhaustive,
-          prepareExportArtifact: exhaustive,
-          onProgress: sendProgress,
-        });
+        const { result, diagnostics } = await captureShopifyGraphqlDiagnostics(
+          () =>
+            runSync(mode, {
+              trigger: "manual",
+              dryRun: true,
+              previewLimit: limit,
+              persistHistory: false,
+              settings,
+              exhaustive,
+              prepareExportArtifact: exhaustive,
+              onProgress: sendProgress,
+            }),
+        );
 
-        controller.enqueue(encodeEvent(encoder, "complete", result));
+        controller.enqueue(
+          encodeEvent(encoder, "complete", {
+            ...result,
+            shopifyDiagnostics: diagnostics,
+          }),
+        );
       } catch (error) {
         controller.enqueue(
           encodeEvent(encoder, "failure", {
