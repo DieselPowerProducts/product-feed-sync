@@ -18,6 +18,7 @@ type PreviewResult = {
     pagesScanned: number;
     scanCompleted: boolean;
     totalProducts: number | null;
+    variantsConsidered: number;
     recordsPrepared: number;
     excluded: number;
     previewLimit: number;
@@ -319,6 +320,14 @@ export function PreviewPanel(props: {
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
                 {result.stats.totalProducts?.toLocaleString() ?? "Unknown"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white/65 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Variants considered
+              </p>
+              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
+                {result.stats.variantsConsidered.toLocaleString()}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
