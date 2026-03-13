@@ -93,7 +93,7 @@ Confirmed mapping and exclusion rules in the current code:
 - videos are ignored
 - `identifierExists` is `true` only when a valid GTIN or MPN exists
 - apparel-only attributes are emitted for apparel product types
-- `customLabel2` normalizes ad-spend codes to `a`, `b`, or `c`
+- `customLabel2` maps ad-spend values `Above Average` -> `a`, `Average` -> `b`, and `Below Average` -> `c`
 - `shippingLabel` prioritizes state restrictions, then `fast_free`, then `Standard`
 - exclude bundles, warranties, Loop products, return-shipping products, `Google_Exclude` items, zero-price variants, and variants with no image
 

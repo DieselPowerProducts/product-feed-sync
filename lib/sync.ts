@@ -836,6 +836,24 @@ function parseEngineLabel(...sources: Array<string | null | undefined>) {
 }
 
 function normalizeCustomLabel2(value: string | null) {
+  const normalized = normalizeLookupToken(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "a" || normalized === "aboveaverage") {
+    return "a";
+  }
+
+  if (normalized === "b" || normalized === "average") {
+    return "b";
+  }
+
+  if (normalized === "c" || normalized === "belowaverage") {
+    return "c";
+  }
+
   return normalizeText(value) || null;
 }
 
