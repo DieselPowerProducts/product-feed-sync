@@ -67,8 +67,13 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-accent-strong">
               Operator Dashboard
             </p>
-            <h1 className="text-4xl font-semibold tracking-[-0.05em] text-foreground md:text-6xl">
-              Feed previews, cadence, and run history
+            <h1 className="tracking-[-0.05em] text-foreground">
+              <span className="block text-4xl font-bold md:text-[61px]">
+                Product Feed Preview -
+              </span>
+              <span className="block text-4xl font-semibold md:text-6xl">
+                Scheduling and Run History
+              </span>
             </h1>
             <p className="max-w-2xl text-base leading-8 text-muted md:text-lg">
               Shopify is live and authenticated. This dashboard is for
