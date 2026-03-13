@@ -22,7 +22,7 @@ const DEFAULT_PREVIEW_LIMIT = 5;
 const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
 const DETAIL_BATCH_SIZE = 5;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
-const DETAIL_MEDIA_LIMIT = 5;
+const DETAIL_MEDIA_LIMIT = SHOPIFY_PAGE_SIZE;
 const DETAIL_METAFIELD_LIMIT = 20;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
@@ -36,6 +36,7 @@ const GOOGLE_PRODUCT_CATEGORY_IDS: Record<string, number> = {
 };
 
 const EXCLUDED_TITLE_PHRASES = [
+  { phrase: "bundle", reason: "bundle_product" },
   { phrase: "red head return shipping", reason: "return_shipping_product" },
   { phrase: "return shipping", reason: "return_shipping_product" },
   { phrase: "extend warranty", reason: "warranty_product" },
@@ -136,6 +137,10 @@ const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
             legacyResourceId
             title
             sku
+            selectedOptions {
+              name
+              value
+            }
             barcode
             price
             compareAtPrice
@@ -216,11 +221,16 @@ export interface FeedPreviewRecord {
     condition: "NEW";
     googleProductCategory: string | null;
     productTypes: string[];
+    ageGroup: string | null;
+    color: string | null;
+    gender: string | null;
     brand: string | null;
     gtins: string[];
     mpn: string | null;
     identifierExists: boolean;
     itemGroupId: string;
+    size: string | null;
+    sizeSystem: string | null;
     customLabel0: string | null;
     customLabel1: string | null;
     customLabel2: string | null;
@@ -357,11 +367,17 @@ interface ShopifyWeight {
   unit: string;
 }
 
+interface ShopifySelectedOption {
+  name: string;
+  value: string;
+}
+
 interface ShopifyVariantNode {
   id: string;
   legacyResourceId: string | null;
   title: string;
   sku: string | null;
+  selectedOptions?: ShopifySelectedOption[];
   barcode: string | null;
   price: string;
   compareAtPrice: string | null;
@@ -578,6 +594,10 @@ function normalizeBooleanish(value: string | null | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function normalizeLookupToken(value: string | null | undefined) {
+  return normalizeText(value).toLowerCase().replace(/[\s_-]+/g, " ");
+}
+
 function normalizeGoogleProductCategory(value: string | null) {
   const normalized = normalizeText(value);
 
@@ -691,19 +711,7 @@ function normalizeStorefrontUrl(params: {
 }
 
 function determineAvailability(variant: ShopifyVariantNode) {
-  if (variant.availableForSale) {
-    return "in_stock" as const;
-  }
-
-  if ((variant.inventoryQuantity ?? 0) > 0) {
-    return "in_stock" as const;
-  }
-
-  if ((variant.inventoryPolicy ?? "").toUpperCase() === "CONTINUE") {
-    return "in_stock" as const;
-  }
-
-  return "out_of_stock" as const;
+  return variant.availableForSale ? ("in_stock" as const) : ("out_of_stock" as const);
 }
 
 function computePriceBucket(price: number) {
@@ -754,6 +762,71 @@ function parseEngineLabel(title: string) {
   }
 
   return null;
+}
+
+function normalizeCustomLabel2(value: string | null) {
+  const normalized = normalizeLookupToken(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "above average" || normalized === "a") {
+    return "a";
+  }
+
+  if (normalized === "average" || normalized === "b") {
+    return "b";
+  }
+
+  if (normalized === "below average" || normalized === "c") {
+    return "c";
+  }
+
+  return normalizeText(value) || null;
+}
+
+function readSelectedOptionValue(
+  selectedOptions: ShopifySelectedOption[] | null | undefined,
+  names: string[],
+) {
+  const normalizedNames = new Set(names.map((name) => normalizeLookupToken(name)));
+
+  for (const option of selectedOptions ?? []) {
+    if (!normalizedNames.has(normalizeLookupToken(option.name))) {
+      continue;
+    }
+
+    const value = normalizeText(option.value);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function isApparelProductType(...values: Array<string | null | undefined>) {
+  return values.some((value) => normalizeLookupToken(value).includes("apparel"));
+}
+
+function buildShippingLabel(params: {
+  stateRestrictions: string | null;
+  quickShip: string | null;
+  priceAmount: number;
+}) {
+  const { stateRestrictions, quickShip, priceAmount } = params;
+
+  if (stateRestrictions) {
+    return stateRestrictions;
+  }
+
+  if (normalizeBooleanish(quickShip) && priceAmount > 199) {
+    return "fast_free";
+  }
+
+  return "Standard";
 }
 
 function normalizeGtin(value: string | null | undefined) {
@@ -872,8 +945,7 @@ function buildPreviewRecord(params: {
     return { excluded: "missing_online_store_url" };
   }
 
-  const additionalImage =
-    productMediaUrls.find((url) => url !== primaryImage) ?? null;
+  const additionalImageLinks = productMediaUrls.filter((url) => url !== primaryImage);
   const mergedMetafields = new Map(productMetafields);
 
   for (const [key, value] of variantMetafields.entries()) {
@@ -918,6 +990,19 @@ function buildPreviewRecord(params: {
     "feed.quick_ship",
   ]);
   const brand = pickFirstNonEmpty(product.vendor);
+  const apparelProduct = isApparelProductType(productType, product.productType);
+  const color = apparelProduct
+    ? pickFirstNonEmpty(
+        readSelectedOptionValue(variant.selectedOptions, ["color", "colour"]),
+        readMappedValue(mergedMetafields, ["color", "custom.color", "feed.color"]),
+      )
+    : null;
+  const size = apparelProduct
+    ? pickFirstNonEmpty(
+        readSelectedOptionValue(variant.selectedOptions, ["size"]),
+        readMappedValue(mergedMetafields, ["size", "custom.size", "feed.size"]),
+      )
+    : null;
   const productTypeValues = productType ? [productType] : [];
   const gtins = gtin ? [gtin] : [];
   const salePrice = hasSalePrice ? formatMicros(priceAmount, currencyCode) : null;
@@ -939,7 +1024,7 @@ function buildPreviewRecord(params: {
       description: stripHtml(product.descriptionHtml),
       link,
       imageLink: primaryImage,
-      additionalImageLinks: additionalImage ? [additionalImage] : [],
+      additionalImageLinks,
       availability:
         determineAvailability(variant) === "in_stock" ? "IN_STOCK" : "OUT_OF_STOCK",
       price: price ?? {
@@ -950,18 +1035,27 @@ function buildPreviewRecord(params: {
       condition: "NEW",
       googleProductCategory,
       productTypes: productTypeValues,
+      ageGroup: apparelProduct ? "ADULT" : null,
+      color,
+      gender: apparelProduct ? "UNISEX" : null,
       brand,
       gtins,
       mpn,
       identifierExists: Boolean(gtin || mpn),
       itemGroupId: productId,
+      size,
+      sizeSystem: apparelProduct ? "US" : null,
       customLabel0: computePriceBucket(priceAmount),
       customLabel1: computeHighPriceBucket(priceAmount),
-      customLabel2: adWordsSpend,
+      customLabel2: normalizeCustomLabel2(adWordsSpend),
       customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
       customLabel4: parseEngineLabel(product.title),
       shippingWeight: formatWeight(variant.inventoryItem?.measurement?.weight),
-      shippingLabel: stateRestrictions ?? "Standard",
+      shippingLabel: buildShippingLabel({
+        stateRestrictions,
+        quickShip,
+        priceAmount,
+      }),
       costOfGoodsSold,
     },
   };

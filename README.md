@@ -17,6 +17,17 @@ Starter Next.js app for a Vercel-hosted Shopify to Google Merchant Center feed s
 
 Nothing here pushes live product data to Google yet. The current code is intentionally read-only while the feed mapping is being validated.
 
+## Confirmed feed rules
+
+- `brand` maps from Shopify `vendor`.
+- `availability` follows storefront sale state: if the variant is purchasable in Shopify, feed `IN_STOCK`; otherwise feed `OUT_OF_STOCK`. Backorders stay `IN_STOCK`.
+- `additionalImageLinks` includes every product image except the primary `imageLink`. Videos are ignored.
+- `identifierExists` is `true` only when a valid GTIN or MPN exists.
+- Apparel-only attributes are emitted when product type resolves to apparel: `ageGroup=ADULT`, `gender=UNISEX`, `sizeSystem=US`, plus `color` and `size` when present.
+- Never send bundles, warranties, Loop products, return-shipping products, products tagged `Google_Exclude`, or variants with no image.
+- `customLabel2` normalizes ad-spend values to Google-ready codes: `Above Average -> a`, `Average -> b`, `Below Average -> c`.
+- `shippingLabel` prioritizes state restrictions. If none exist and `quick_ship` is true with price over `$199`, feed `fast_free`; otherwise fall back to `Standard`.
+
 ## Local development
 
 ```bash

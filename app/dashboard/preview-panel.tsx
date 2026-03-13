@@ -33,11 +33,16 @@ type FeedPreviewRecord = {
     condition: "NEW";
     googleProductCategory: string | null;
     productTypes: string[];
+    ageGroup: string | null;
+    color: string | null;
+    gender: string | null;
     brand: string | null;
     gtins: string[];
     mpn: string | null;
     identifierExists: boolean;
     itemGroupId: string;
+    size: string | null;
+    sizeSystem: string | null;
     customLabel0: string | null;
     customLabel1: string | null;
     customLabel2: string | null;
@@ -174,6 +179,24 @@ const columns: ColumnDefinition[] = [
     getValue: (record) => record.productAttributes.productTypes,
   },
   {
+    id: "productAttributes.ageGroup",
+    label: "productAttributes.ageGroup",
+    defaultWidth: 170,
+    getValue: (record) => record.productAttributes.ageGroup,
+  },
+  {
+    id: "productAttributes.color",
+    label: "productAttributes.color",
+    defaultWidth: 160,
+    getValue: (record) => record.productAttributes.color,
+  },
+  {
+    id: "productAttributes.gender",
+    label: "productAttributes.gender",
+    defaultWidth: 170,
+    getValue: (record) => record.productAttributes.gender,
+  },
+  {
     id: "productAttributes.brand",
     label: "productAttributes.brand",
     defaultWidth: 160,
@@ -202,6 +225,18 @@ const columns: ColumnDefinition[] = [
     label: "productAttributes.itemGroupId",
     defaultWidth: 180,
     getValue: (record) => record.productAttributes.itemGroupId,
+  },
+  {
+    id: "productAttributes.size",
+    label: "productAttributes.size",
+    defaultWidth: 150,
+    getValue: (record) => record.productAttributes.size,
+  },
+  {
+    id: "productAttributes.sizeSystem",
+    label: "productAttributes.sizeSystem",
+    defaultWidth: 180,
+    getValue: (record) => record.productAttributes.sizeSystem,
   },
   {
     id: "productAttributes.customLabel0",
