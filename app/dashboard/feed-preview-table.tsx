@@ -438,7 +438,7 @@ export function FeedPreviewTable(props: {
     <div className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
       <div
         ref={tableViewportRef}
-        className="overflow-auto"
+        className="relative overflow-auto"
         style={{ height: `${tableViewportHeight}px` }}
       >
         <table
@@ -456,12 +456,12 @@ export function FeedPreviewTable(props: {
               />
             ))}
           </colgroup>
-          <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
+          <thead className="border-b border-line text-xs uppercase tracking-[0.18em] text-muted">
             <tr>
               {columns.map((column) => (
                 <th
                   key={column.id}
-                  className="relative border-r border-line/50 px-4 py-3 pr-6 whitespace-nowrap last:border-r-0"
+                  className="sticky top-0 z-10 border-r border-line/50 bg-white/95 px-4 py-3 pr-6 whitespace-nowrap last:border-r-0"
                   style={{
                     minWidth: `${MIN_COLUMN_WIDTH}px`,
                     width: `${columnWidths[column.id]}px`,
