@@ -167,6 +167,24 @@ export function PreviewPanel(props: {
       : progress?.stage === "complete" && progress.totalProducts === 0
         ? 100
       : null;
+  const previewParentProductsIncluded = result
+    ? new Set(result.preview.map((record) => record.productAttributes.itemGroupId)).size
+    : 0;
+  const totalMatchesValue = result
+    ? result.exhaustive
+      ? result.stats.recordsPrepared
+      : result.preview.length
+    : 0;
+  const parentProductsScannedValue = result
+    ? result.exhaustive
+      ? (result.stats.totalProducts ?? result.stats.productsFetched)
+      : previewParentProductsIncluded
+    : 0;
+  const totalVariantsScannedValue = result
+    ? result.exhaustive
+      ? result.stats.variantsConsidered
+      : result.preview.length
+    : 0;
 
   return (
     <article className="glass-panel rounded-[1.75rem] p-6">
@@ -319,23 +337,38 @@ export function PreviewPanel(props: {
                 Total matches
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {result.stats.totalProducts?.toLocaleString() ?? "Unknown"}
+                {totalMatchesValue.toLocaleString()}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                {result.exhaustive
+                  ? "Total included rows in the generated feed."
+                  : "Rows included in the current preview sample."}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                Variants considered
+                Parent Products Scanned
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {result.stats.variantsConsidered.toLocaleString()}
+                {parentProductsScannedValue.toLocaleString()}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                {result.exhaustive
+                  ? "Parent Shopify products scanned in this run."
+                  : "Unique parent products represented in the preview sample."}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                Records prepared
+                Total Variants Scanned
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {result.stats.recordsPrepared}
+                {totalVariantsScannedValue.toLocaleString()}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                {result.exhaustive
+                  ? "Variant or SKU rows evaluated during the scan."
+                  : "Variant rows represented in the current preview sample."}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
