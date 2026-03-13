@@ -77,7 +77,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </h1>
             <p className="max-w-2xl text-base leading-8 text-muted md:text-lg">
               Shopify is live and authenticated. This dashboard is for
-              validating normalized feed output and controlling the sync cadence
+              validating normalized feed output and controlling the sync Schedule
               before Google Merchant writes are turned on.
             </p>
           </div>
