@@ -321,9 +321,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
                   <tr>
                     <th className="px-4 py-3">Started</th>
+                    <th className="px-4 py-3">Duration</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Result</th>
-                    <th className="px-4 py-3">Duration</th>
                     <th className="px-4 py-3">Counts</th>
                     <th className="px-4 py-3">Scope</th>
                   </tr>
@@ -336,6 +336,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           {formatTimestamp(entry.startedAt)}
                         </p>
                         <p className="mt-2 text-muted">{entry.trigger}</p>
+                      </td>
+                      <td className="px-4 py-4 text-muted">
+                        {formatDuration(entry.startedAt, entry.finishedAt)}
                       </td>
                       <td className="px-4 py-4">
                         <p className="font-semibold text-foreground">{entry.mode}</p>
@@ -362,9 +365,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
                             View sample
                           </Link>
                         ) : null}
-                      </td>
-                      <td className="px-4 py-4 text-muted">
-                        {formatDuration(entry.startedAt, entry.finishedAt)}
                       </td>
                       <td className="px-4 py-4 text-muted">
                         <p>Products: {entry.stats.productsFetched}</p>
