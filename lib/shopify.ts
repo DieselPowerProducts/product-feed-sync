@@ -26,6 +26,17 @@ interface ShopifyTokenResponse {
 interface ShopifyGraphqlResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
+  extensions?: {
+    cost?: {
+      requestedQueryCost?: number;
+      actualQueryCost?: number;
+      throttleStatus?: {
+        maximumAvailable?: number;
+        currentlyAvailable?: number;
+        restoreRate?: number;
+      };
+    };
+  };
 }
 
 export interface ShopifyRuntimeToken {
@@ -325,6 +336,7 @@ export async function runShopifyAdminGraphql<T>(params: {
   shop?: string;
   accessToken?: string;
 }) {
+  const startedAt = Date.now();
   const shop = params.shop ?? getConfiguredShopDomain();
 
   if (!shop) {
@@ -359,9 +371,24 @@ export async function runShopifyAdminGraphql<T>(params: {
   );
 
   const body = await response.text();
+  const durationMs = Date.now() - startedAt;
   const payload = body
     ? (JSON.parse(body) as ShopifyGraphqlResponse<T>)
     : ({} as ShopifyGraphqlResponse<T>);
+  const operationMatch = params.query.match(/\b(query|mutation)\s+([A-Za-z0-9_]+)/);
+  const operationName = operationMatch?.[2] ?? "anonymous";
+  const cost = payload.extensions?.cost;
+
+  if (cost) {
+    const throttle = cost.throttleStatus;
+    console.info(
+      `[shopify-graphql] ${operationName} status=${response.status} duration_ms=${durationMs} requested_cost=${cost.requestedQueryCost ?? "unknown"} actual_cost=${cost.actualQueryCost ?? "unknown"} throttle_available=${throttle?.currentlyAvailable ?? "unknown"} throttle_max=${throttle?.maximumAvailable ?? "unknown"} restore_rate=${throttle?.restoreRate ?? "unknown"}`,
+    );
+  } else {
+    console.info(
+      `[shopify-graphql] ${operationName} status=${response.status} duration_ms=${durationMs}`,
+    );
+  }
 
   if (!response.ok) {
     throw new Error(`Shopify GraphQL request failed: ${response.status} ${body}`);
