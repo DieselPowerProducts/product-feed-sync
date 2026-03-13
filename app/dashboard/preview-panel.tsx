@@ -170,14 +170,14 @@ export function PreviewPanel(props: {
   const previewParentProductsIncluded = result
     ? new Set(result.preview.map((record) => record.productAttributes.itemGroupId)).size
     : 0;
-  const totalMatchesValue = result
+  const includedFeedRowsValue = result
     ? result.exhaustive
       ? result.stats.recordsPrepared
       : result.preview.length
     : 0;
   const parentProductsScannedValue = result
     ? result.exhaustive
-      ? (result.stats.totalProducts ?? result.stats.productsFetched)
+      ? result.stats.productsFetched
       : previewParentProductsIncluded
     : 0;
   const totalVariantsScannedValue = result
@@ -315,10 +315,15 @@ export function PreviewPanel(props: {
           <div className="grid gap-4 md:grid-cols-4">
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                Products fetched
+                Included Feed Rows
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {result.stats.productsFetched}
+                {includedFeedRowsValue.toLocaleString()}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                {result.exhaustive
+                  ? "Rows that made it into the generated feed after exclusions."
+                  : "Rows currently included in the preview sample."}
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
@@ -334,19 +339,6 @@ export function PreviewPanel(props: {
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                Total matches
-              </p>
-              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {totalMatchesValue.toLocaleString()}
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                {result.exhaustive
-                  ? "Total included rows in the generated feed."
-                  : "Rows included in the current preview sample."}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-line bg-white/65 p-4">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
                 Parent Products Scanned
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
@@ -354,7 +346,7 @@ export function PreviewPanel(props: {
               </p>
               <p className="mt-2 text-sm text-muted">
                 {result.exhaustive
-                  ? "Parent Shopify products scanned in this run."
+                  ? "Parent Shopify products scanned across the paginated run."
                   : "Unique parent products represented in the preview sample."}
               </p>
             </div>
@@ -377,6 +369,9 @@ export function PreviewPanel(props: {
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
                 {result.stats.excluded}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                Combined parent-product and variant-level exclusions.
               </p>
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
