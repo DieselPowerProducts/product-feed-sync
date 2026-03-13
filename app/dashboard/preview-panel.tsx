@@ -328,17 +328,6 @@ export function PreviewPanel(props: {
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-                Pages scanned
-              </p>
-              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
-                {result.stats.pagesScanned}
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                {result.stats.scanCompleted ? "Complete" : "Stopped early"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-line bg-white/65 p-4">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
                 Parent Products Scanned
               </p>
               <p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">
