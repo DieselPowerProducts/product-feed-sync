@@ -66,7 +66,7 @@ const SHOPIFY_PRODUCT_SCAN_QUERY = `
 `;
 
 const SHOPIFY_PRODUCT_DETAILS_QUERY = `
-  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!) {
+  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!, $variantLimit: Int!) {
     nodes(ids: $ids) {
       ... on Product {
         id
@@ -113,6 +113,51 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
               key
               value
               type
+            }
+          }
+        }
+        variants(first: $variantLimit) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              legacyResourceId
+              title
+              sku
+              selectedOptions {
+                name
+                value
+              }
+              barcode
+              price
+              compareAtPrice
+              inventoryPolicy
+              inventoryQuantity
+              availableForSale
+              googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
+                value
+              }
+              application: metafield(namespace: "custom", key: "application") {
+                value
+              }
+              image {
+                url
+              }
+              inventoryItem {
+                measurement {
+                  weight {
+                    value
+                    unit
+                  }
+                }
+                unitCost {
+                  amount
+                  currencyCode
+                }
+              }
             }
           }
         }
@@ -1088,9 +1133,13 @@ async function fetchAllProductVariants(params: {
   shop: string;
   accessToken: string;
   productId: string;
+  initialVariants?: ShopifyVariantNode[];
+  afterCursor?: string | null;
 }) {
-  const variants: ShopifyVariantNode[] = [];
-  let cursor: string | null = null;
+  const variants: ShopifyVariantNode[] = params.initialVariants
+    ? [...params.initialVariants]
+    : [];
+  let cursor: string | null = params.afterCursor ?? null;
 
   while (true) {
     const payload: ShopifyProductVariantsPayload =
@@ -1327,6 +1376,7 @@ async function buildDryRunPreview(params: {
             ids: batchIds,
             mediaLimit: DETAIL_MEDIA_LIMIT,
             metafieldLimit: DETAIL_METAFIELD_LIMIT,
+            variantLimit: DETAIL_VARIANT_PAGE_SIZE,
           },
         });
 
@@ -1339,11 +1389,16 @@ async function buildDryRunPreview(params: {
         const productId = resolveLegacyId(product.legacyResourceId, product.id);
         const productMetafields = collectMetafieldLookup(product.metafields);
         const productMediaUrls = collectMediaUrls(product);
-        const variants = await fetchAllProductVariants({
-          shop,
-          accessToken: token.accessToken,
-          productId: product.id,
-        });
+        const initialVariants = connectionNodes<ShopifyVariantNode>(product.variants);
+        const variants = product.variants?.pageInfo?.hasNextPage
+          ? await fetchAllProductVariants({
+              shop,
+              accessToken: token.accessToken,
+              productId: product.id,
+              initialVariants,
+              afterCursor: product.variants.pageInfo.endCursor ?? null,
+            })
+          : initialVariants;
 
         for (const variant of variants) {
           variantsConsidered += 1;
