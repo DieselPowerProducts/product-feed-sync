@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 import type { FeedPreviewRecord, SyncExportResult } from "@/lib/sync";
 
-type BrettExportRow = {
+type FeedExportRow = {
   id: string;
   title: string;
   description: string;
@@ -35,7 +35,7 @@ type BrettExportRow = {
   size_system: string;
 };
 
-const BRETT_EXPORT_HEADERS: Array<keyof BrettExportRow> = [
+const FEED_EXPORT_HEADERS: Array<keyof FeedExportRow> = [
   "id",
   "title",
   "description",
@@ -108,7 +108,7 @@ function parseOfferId(offerId: string) {
   };
 }
 
-function toBrettExportRow(record: FeedPreviewRecord): BrettExportRow {
+function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {
   const parsedIds = parseOfferId(record.offerId);
   const variantId = readCustomAttribute(record, "variant_id") || parsedIds.variantId;
   const productId = readCustomAttribute(record, "product_id") || parsedIds.productId;
@@ -201,8 +201,8 @@ export function buildPreviewExportWorkbook(result: SyncExportResult) {
   appendSheet(
     workbook,
     "feed_export",
-    result.rows.map(toBrettExportRow),
-    BRETT_EXPORT_HEADERS,
+    result.rows.map(toFeedExportRow),
+    FEED_EXPORT_HEADERS,
   );
   appendSheet(
     workbook,

@@ -247,9 +247,9 @@ export function PreviewPanel(props: {
         <div className="mt-6 grid gap-5">
           <div className="flex flex-col gap-3 rounded-2xl border border-line bg-white/65 p-4 md:flex-row md:items-center md:justify-between">
             <div className="text-sm leading-7 text-muted">
-              Download the current <strong>{mode}</strong> export as a Brett-style
-              XLSX. This reruns the selected mode and includes all matching rows,
-              not just the preview sample shown below.
+              Download the current <strong>{mode}</strong> export as an XLSX. This
+              reruns the selected mode and includes all matching rows, not just
+              the preview sample shown below.
             </div>
             <a
               href={`/api/dashboard/export/preview?mode=${mode}`}
