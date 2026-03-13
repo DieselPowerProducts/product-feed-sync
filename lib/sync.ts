@@ -306,6 +306,21 @@ export interface SyncRunResult {
   preview: FeedPreviewRecord[];
 }
 
+export interface SyncExportResult {
+  ok: boolean;
+  mode: Exclude<SyncMode, "idle">;
+  dryRun: boolean;
+  exhaustive: boolean;
+  startedAt: string;
+  finishedAt: string;
+  notes: string[];
+  query: string;
+  lookbackStart: string | null;
+  stats: SyncRunResult["stats"];
+  exclusions: Record<string, number>;
+  rows: FeedPreviewRecord[];
+}
+
 export interface SyncProgressUpdate {
   stage: "counting" | "scanning" | "complete";
   exhaustive: boolean;
@@ -1116,6 +1131,7 @@ async function buildDryRunPreview(params: {
   artifactSampleLimit: number;
   settings: SyncSettings;
   exhaustive: boolean;
+  collectAllRecords?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
   const shop = getConfiguredShopDomain();
@@ -1141,6 +1157,7 @@ async function buildDryRunPreview(params: {
     : null;
   const search = buildSearchQuery(params.mode, params.settings);
   const preview: FeedPreviewRecord[] = [];
+  const allRecords: FeedPreviewRecord[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
   const exclusions: Record<string, number> = {};
   let totalProducts: number | null = null;
@@ -1238,7 +1255,8 @@ async function buildDryRunPreview(params: {
       candidateIds.push(product.id);
     }
 
-    const shouldHydrateDetails = preview.length < params.artifactSampleLimit;
+    const shouldHydrateDetails =
+      params.collectAllRecords || preview.length < params.artifactSampleLimit;
 
     for (const batchIds of chunkArray(candidateIds, DETAIL_BATCH_SIZE)) {
       if (!shouldHydrateDetails) {
@@ -1299,6 +1317,10 @@ async function buildDryRunPreview(params: {
           }
 
           recordsPrepared += 1;
+
+          if (params.collectAllRecords) {
+            allRecords.push(record);
+          }
 
           if (preview.length < params.artifactSampleLimit) {
             preview.push(record);
@@ -1368,6 +1390,7 @@ async function buildDryRunPreview(params: {
     query: search.query,
     lookbackStart: search.lookbackStart,
     storefrontBaseUrl,
+    allRecords,
     preview: preview.slice(0, params.previewLimit),
     includedSamples: preview.slice(0, params.artifactSampleLimit),
     excludedSamples,
@@ -1379,6 +1402,47 @@ async function buildDryRunPreview(params: {
     variantsConsidered,
     recordsPrepared,
   };
+}
+
+function buildSyncNotes(params: {
+  dryRun: boolean;
+  exhaustive: boolean;
+  previewLimit: number;
+  scanCompleted: boolean;
+}) {
+  const notes = [
+    "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
+    "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
+    `Product core details are hydrated in batches of ${DETAIL_BATCH_SIZE} products, and each product's variants are paged separately in batches of up to ${DETAIL_VARIANT_PAGE_SIZE}.`,
+    "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
+  ];
+
+  if (params.dryRun) {
+    notes.unshift(
+      "Dry run is enabled. This is the safest mode for previewing mappings before any live feed writes.",
+    );
+  } else {
+    notes.unshift(
+      "Dry run is disabled, but this build still does not perform Google writes yet.",
+    );
+  }
+
+  if (params.exhaustive) {
+    notes.push(
+      params.scanCompleted
+        ? "Exhaustive scan reached the end of the matching Shopify catalog."
+        : "Exhaustive scan stopped before reaching the end of the catalog.",
+    );
+    notes.push(
+      `The preview table still shows only ${params.previewLimit} normalized rows even after the exhaustive scan completes.`,
+    );
+  } else {
+    notes.push(
+      "Sample preview stops as soon as enough normalized rows have been collected for the requested preview size.",
+    );
+  }
+
+  return notes;
 }
 
 function formatDateOnly(date: Date) {
@@ -1551,37 +1615,12 @@ export async function runSync(
       (sum, count) => sum + count,
       0,
     );
-    const notes = [
-      "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
-      "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
-      `Product core details are hydrated in batches of ${DETAIL_BATCH_SIZE} products, and each product's variants are paged separately in batches of up to ${DETAIL_VARIANT_PAGE_SIZE}.`,
-      "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
-    ];
-
-    if (dryRun) {
-      notes.unshift(
-        "Dry run is enabled. This is the safest mode for previewing mappings before any live feed writes.",
-      );
-    } else {
-      notes.unshift(
-        "Dry run is disabled, but this build still does not perform Google writes yet.",
-      );
-    }
-
-    if (exhaustive) {
-      notes.push(
-        previewRun.scanCompleted
-          ? "Exhaustive scan reached the end of the matching Shopify catalog."
-          : "Exhaustive scan stopped before reaching the end of the catalog.",
-      );
-      notes.push(
-        `The preview table still shows only ${previewLimit} normalized rows even after the exhaustive scan completes.`,
-      );
-    } else {
-      notes.push(
-        "Sample preview stops as soon as enough normalized rows have been collected for the requested preview size.",
-      );
-    }
+    const notes = buildSyncNotes({
+      dryRun,
+      exhaustive,
+      previewLimit,
+      scanCompleted: previewRun.scanCompleted,
+    });
 
     const result = {
       ok: true,
@@ -1700,4 +1739,60 @@ export async function runSync(
 
     return result;
   }
+}
+
+export async function runSyncExport(
+  mode: Exclude<SyncMode, "idle">,
+  options?: {
+    dryRun?: boolean;
+    settings?: SyncSettings;
+  },
+): Promise<SyncExportResult> {
+  const settings = options?.settings ?? (await getSyncSettings());
+  const startedAt = new Date().toISOString();
+  const dryRun = options?.dryRun ?? settings.defaultDryRun;
+  const exhaustive = true;
+
+  const previewRun = await buildDryRunPreview({
+    mode,
+    previewLimit: DEFAULT_PREVIEW_LIMIT,
+    artifactSampleLimit: 1,
+    settings,
+    exhaustive,
+    collectAllRecords: true,
+  });
+  const excluded = Object.values(previewRun.exclusions).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+
+  return {
+    ok: true,
+    mode,
+    dryRun,
+    exhaustive,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    notes: buildSyncNotes({
+      dryRun,
+      exhaustive,
+      previewLimit: DEFAULT_PREVIEW_LIMIT,
+      scanCompleted: previewRun.scanCompleted,
+    }),
+    query: previewRun.query,
+    lookbackStart: previewRun.lookbackStart,
+    stats: {
+      pageSize: SHOPIFY_PAGE_SIZE,
+      pagesScanned: previewRun.pagesScanned,
+      scanCompleted: previewRun.scanCompleted,
+      totalProducts: previewRun.totalProducts,
+      productsFetched: previewRun.productsFetched,
+      variantsConsidered: previewRun.variantsConsidered,
+      recordsPrepared: previewRun.recordsPrepared,
+      excluded,
+      previewLimit: DEFAULT_PREVIEW_LIMIT,
+    },
+    exclusions: previewRun.exclusions,
+    rows: previewRun.allRecords,
+  };
 }
