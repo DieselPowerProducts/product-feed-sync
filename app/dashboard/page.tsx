@@ -103,9 +103,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </span>
             </h1>
             <p className="max-w-2xl text-base leading-8 text-muted md:text-lg">
-              Shopify is live and authenticated. This dashboard is for
-              validating normalized feed output and controlling the sync Schedule
-              before Google Merchant writes are turned on.
+              This dashboard is for validating normalized feed output and
+              controlling the sync Schedule before Google Merchant writes are
+              turned on.
             </p>
           </div>
 
@@ -287,8 +287,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   {prettifyStorageMode(storeStatus.mode)}
                 </p>
                 <p className="max-w-xl text-sm leading-7 text-muted">
-                  Vercel cron still runs daily at <code>09:00 UTC</code>. The UI
-                  controls cadence logic, not the cron clock itself.
+                  Vercel cron still runs daily at <code>09:00 UTC</code>.
+                  <br />
+                  The UI controls cadence logic, not the cron clock itself.
                 </p>
               </div>
             </article>
