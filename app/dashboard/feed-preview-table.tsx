@@ -17,10 +17,16 @@ export type GoogleWeightValue = {
   unit: string;
 };
 
+export type GoogleCustomAttribute = {
+  name: string;
+  value: string;
+};
+
 export type FeedPreviewRecord = {
   offerId: string;
   contentLanguage: string;
   feedLabel: string;
+  customAttributes?: GoogleCustomAttribute[];
   productAttributes: {
     title: string;
     description: string;
@@ -72,6 +78,13 @@ type ColumnDefinition = {
   getValue: (record: FeedPreviewRecord) => CellValue;
 };
 
+function getCustomAttributeValue(record: FeedPreviewRecord, name: string) {
+  return (
+    record.customAttributes?.find((attribute) => attribute.name === name)?.value ??
+    null
+  );
+}
+
 const columns: ColumnDefinition[] = [
   { id: "offerId", label: "offerId", defaultWidth: 200, getValue: (record) => record.offerId },
   {
@@ -81,6 +94,18 @@ const columns: ColumnDefinition[] = [
     getValue: (record) => record.contentLanguage,
   },
   { id: "feedLabel", label: "feedLabel", defaultWidth: 140, getValue: (record) => record.feedLabel },
+  {
+    id: "customAttributes.variant_id",
+    label: "customAttributes.variant_id",
+    defaultWidth: 190,
+    getValue: (record) => getCustomAttributeValue(record, "variant_id"),
+  },
+  {
+    id: "customAttributes.product_id",
+    label: "customAttributes.product_id",
+    defaultWidth: 190,
+    getValue: (record) => getCustomAttributeValue(record, "product_id"),
+  },
   {
     id: "productAttributes.title",
     label: "productAttributes.title",

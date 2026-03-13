@@ -1,4 +1,5 @@
 import { env, getConfigurationStatus } from "@/lib/env";
+import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
   getSyncSettings,
@@ -27,13 +28,6 @@ const DETAIL_METAFIELD_LIMIT = 20;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
-
-const GOOGLE_PRODUCT_CATEGORY_IDS: Record<string, number> = {
-  "motor vehicle parts": 899,
-  "motor vehicle engine parts": 2820,
-  "motor vehicle fuel systems": 2727,
-  "motor vehicle transmission & drivetrain parts": 2641,
-};
 
 const EXCLUDED_TITLE_PHRASES = [
   { phrase: "bundle", reason: "bundle_product" },
@@ -211,10 +205,16 @@ export interface GoogleWeightValue {
   unit: string;
 }
 
+export interface GoogleCustomAttribute {
+  name: string;
+  value: string;
+}
+
 export interface FeedPreviewRecord {
   offerId: string;
   contentLanguage: string;
   feedLabel: string;
+  customAttributes?: GoogleCustomAttribute[];
   productAttributes: {
     title: string;
     description: string;
@@ -613,12 +613,7 @@ function normalizeGoogleProductCategory(value: string | null) {
     return null;
   }
 
-  if (/^\d+$/.test(normalized)) {
-    return normalized;
-  }
-
-  const mappedId = GOOGLE_PRODUCT_CATEGORY_IDS[normalized.toLowerCase()];
-  return mappedId ? String(mappedId) : normalized;
+  return resolveGoogleProductCategoryId(normalized);
 }
 
 function collectMetafieldLookup(
@@ -780,24 +775,6 @@ function parseEngineLabel(...sources: Array<string | null | undefined>) {
 }
 
 function normalizeCustomLabel2(value: string | null) {
-  const normalized = normalizeLookupToken(value);
-
-  if (!normalized) {
-    return null;
-  }
-
-  if (normalized === "above average" || normalized === "a") {
-    return "a";
-  }
-
-  if (normalized === "average" || normalized === "b") {
-    return "b";
-  }
-
-  if (normalized === "below average" || normalized === "c") {
-    return "c";
-  }
-
   return normalizeText(value) || null;
 }
 
@@ -1039,6 +1016,16 @@ function buildPreviewRecord(params: {
     offerId: `shopify_ZZ_${productId}_${variantId}`,
     contentLanguage: env.googleContentLanguage || "en",
     feedLabel: env.googleFeedLabel || "US",
+    customAttributes: [
+      {
+        name: "variant_id",
+        value: variantId,
+      },
+      {
+        name: "product_id",
+        value: productId,
+      },
+    ],
     productAttributes: {
       title: product.title,
       description: stripHtml(product.descriptionHtml),
