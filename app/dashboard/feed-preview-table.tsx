@@ -300,7 +300,11 @@ function stringifyCellValue(value: CellValue) {
     return "";
   }
 
-  if (Array.isArray(value) || typeof value === "object") {
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+
+  if (typeof value === "object") {
     return JSON.stringify(value);
   }
 
