@@ -26,6 +26,7 @@ const DETAIL_BATCH_SIZE = 150;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
 const DETAIL_MEDIA_LIMIT = SHOPIFY_PAGE_SIZE;
 const DETAIL_METAFIELD_LIMIT = 20;
+const ENGINE_LABEL_TITLE_TAIL_WORDS = 8;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
@@ -806,57 +807,96 @@ function computeHighPriceBucket(price: number) {
   return "700+";
 }
 
-function parseEngineLabel(...sources: Array<string | null | undefined>) {
-  const haystack = sources
-    .map((value) => normalizeText(value).toLowerCase())
-    .filter(Boolean)
-    .join(" ");
-
-  if (!haystack) {
-    return null;
-  }
-
+function resolveEngineLabel(haystack: string) {
+  const normalizedHaystack = haystack.replace(/\bpower\s*stroke\s*products\b/g, " ");
   const explicitMatches = new Set<string>();
 
-  if (/\bcummins\b/.test(haystack)) {
+  if (/\bcummins\b/.test(normalizedHaystack)) {
     explicitMatches.add("Cummins");
   }
 
-  if (/\bpower\s*stroke\b|\bpowerstroke\b/.test(haystack)) {
+  if (/\bpower\s*stroke\b|\bpowerstroke\b/.test(normalizedHaystack)) {
     explicitMatches.add("Powerstroke");
   }
 
-  if (/\bduramax\b/.test(haystack)) {
+  if (/\bduramax\b/.test(normalizedHaystack)) {
     explicitMatches.add("Duramax");
   }
 
-  if (/\beco\s*diesel\b|\becodiesel\b/.test(haystack)) {
+  if (/\beco\s*diesel\b|\becodiesel\b/.test(normalizedHaystack)) {
     explicitMatches.add("Ecodiesel");
-  }
-
-  if (explicitMatches.size === 1) {
-    return explicitMatches.values().next().value ?? null;
-  }
-
-  if (explicitMatches.size > 1) {
-    return null;
   }
 
   const inferredMatches = new Set<string>();
 
-  if (/\bram\b|\bdodge\b/.test(haystack)) {
+  if (/\bram\b|\bdodge\b/.test(normalizedHaystack)) {
     inferredMatches.add("Cummins");
   }
 
-  if (/\bford\b/.test(haystack)) {
+  if (/\bford\b/.test(normalizedHaystack)) {
     inferredMatches.add("Powerstroke");
   }
 
-  if (/\bgm\b|\bgmc\b|\bchevy\b|\bchevrolet\b/.test(haystack)) {
+  if (/\bgm\b|\bgmc\b|\bchevy\b|\bchevrolet\b/.test(normalizedHaystack)) {
     inferredMatches.add("Duramax");
   }
 
-  return inferredMatches.size === 1 ? (inferredMatches.values().next().value ?? null) : null;
+  if (explicitMatches.size === 1) {
+    return {
+      label: explicitMatches.values().next().value ?? null,
+      ambiguous: false,
+    };
+  }
+
+  if (explicitMatches.size > 1) {
+    if (inferredMatches.size === 1) {
+      const inferred = inferredMatches.values().next().value ?? null;
+
+      return {
+        label: inferred && explicitMatches.has(inferred) ? inferred : null,
+        ambiguous: true,
+      };
+    }
+
+    return { label: null, ambiguous: true };
+  }
+
+  if (inferredMatches.size === 1) {
+    return {
+      label: inferredMatches.values().next().value ?? null,
+      ambiguous: false,
+    };
+  }
+
+  return { label: null, ambiguous: false };
+}
+
+function parseEngineLabel(params: {
+  title: string | null | undefined;
+  application: string | null | undefined;
+}) {
+  const applicationResult = resolveEngineLabel(
+    normalizeText(params.application).toLowerCase(),
+  );
+
+  if (applicationResult.label || applicationResult.ambiguous) {
+    return applicationResult.label;
+  }
+
+  const fitmentTail = normalizeText(params.title)
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(-ENGINE_LABEL_TITLE_TAIL_WORDS)
+    .join(" ");
+
+  if (!fitmentTail) {
+    return null;
+  }
+
+  const titleResult = resolveEngineLabel(fitmentTail);
+
+  return titleResult.label;
 }
 
 function normalizeCustomLabel2(value: string | null) {
@@ -1159,7 +1199,10 @@ function buildPreviewRecord(params: {
       customLabel1: computeHighPriceBucket(priceAmount),
       customLabel2: normalizeCustomLabel2(adWordsSpend),
       customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
-      customLabel4: parseEngineLabel(application, product.title),
+      customLabel4: parseEngineLabel({
+        title: product.title,
+        application,
+      }),
       shippingWeight: formatWeight(variant.inventoryItem?.measurement?.weight),
       shippingLabel: buildShippingLabel({
         stateRestrictions,
