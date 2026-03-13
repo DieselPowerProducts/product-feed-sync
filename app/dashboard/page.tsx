@@ -34,6 +34,29 @@ function formatTimestamp(value: string) {
   }).format(new Date(value));
 }
 
+function formatDuration(startedAt: string, finishedAt: string) {
+  const startedMs = new Date(startedAt).getTime();
+  const finishedMs = new Date(finishedAt).getTime();
+
+  if (!Number.isFinite(startedMs) || !Number.isFinite(finishedMs) || finishedMs < startedMs) {
+    return "-";
+  }
+
+  const totalSeconds = Math.round((finishedMs - startedMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  if (seconds === 0) {
+    return `${minutes}m`;
+  }
+
+  return `${minutes}m ${seconds}s`;
+}
+
 function prettifyStorageMode(mode: "blob" | "local" | "memory") {
   if (mode === "blob") {
     return "Vercel Blob";
@@ -305,6 +328,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                     <th className="px-4 py-3">Started</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Result</th>
+                    <th className="px-4 py-3">Duration</th>
                     <th className="px-4 py-3">Counts</th>
                     <th className="px-4 py-3">Scope</th>
                   </tr>
@@ -343,6 +367,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                             View sample
                           </Link>
                         ) : null}
+                      </td>
+                      <td className="px-4 py-4 text-muted">
+                        {formatDuration(entry.startedAt, entry.finishedAt)}
                       </td>
                       <td className="px-4 py-4 text-muted">
                         <p>Products: {entry.stats.productsFetched}</p>
