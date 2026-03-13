@@ -88,6 +88,9 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
         googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
           value
         }
+        application: metafield(namespace: "custom", key: "application") {
+          value
+        }
         featuredMedia {
           __typename
           ... on MediaImage {
@@ -148,6 +151,9 @@ const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
             inventoryQuantity
             availableForSale
             googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
+              value
+            }
+            application: metafield(namespace: "custom", key: "application") {
               value
             }
             image {
@@ -385,6 +391,7 @@ interface ShopifyVariantNode {
   inventoryQuantity: number | null;
   availableForSale: boolean;
   googleMpn?: ShopifySingleMetafieldValue | null;
+  application?: ShopifySingleMetafieldValue | null;
   image?: {
     url?: string | null;
   } | null;
@@ -410,6 +417,7 @@ interface ShopifyProductNode {
   updatedAt: string;
   onlineStoreUrl: string | null;
   googleMpn?: ShopifySingleMetafieldValue | null;
+  application?: ShopifySingleMetafieldValue | null;
   featuredMedia?: ShopifyMediaNode | null;
   media?: ShopifyConnection<ShopifyMediaNode>;
   metafields?: ShopifyConnection<ShopifyMetafieldNode>;
@@ -742,22 +750,29 @@ function computeHighPriceBucket(price: number) {
   return "700+";
 }
 
-function parseEngineLabel(title: string) {
-  const normalizedTitle = title.toLowerCase();
+function parseEngineLabel(...sources: Array<string | null | undefined>) {
+  const haystack = sources
+    .map((value) => normalizeText(value).toLowerCase())
+    .filter(Boolean)
+    .join(" ");
 
-  if (normalizedTitle.includes("cummins")) {
+  if (!haystack) {
+    return null;
+  }
+
+  if (/\bcummins\b/.test(haystack)) {
     return "Cummins";
   }
 
-  if (normalizedTitle.includes("powerstroke")) {
+  if (/\bpower\s*stroke\b|\bpowerstroke\b/.test(haystack)) {
     return "Powerstroke";
   }
 
-  if (normalizedTitle.includes("duramax")) {
+  if (/\bduramax\b/.test(haystack)) {
     return "Duramax";
   }
 
-  if (normalizedTitle.includes("ecodiesel")) {
+  if (/\beco\s*diesel\b|\becodiesel\b/.test(haystack)) {
     return "Ecodiesel";
   }
 
@@ -989,6 +1004,11 @@ function buildPreviewRecord(params: {
     "custom.quick_ship",
     "feed.quick_ship",
   ]);
+  const application = pickFirstNonEmpty(
+    variant.application?.value ?? null,
+    product.application?.value ?? null,
+    readMappedValue(mergedMetafields, ["custom.application", "application"]),
+  );
   const brand = pickFirstNonEmpty(product.vendor);
   const apparelProduct = isApparelProductType(productType, product.productType);
   const color = apparelProduct
@@ -1049,7 +1069,7 @@ function buildPreviewRecord(params: {
       customLabel1: computeHighPriceBucket(priceAmount),
       customLabel2: normalizeCustomLabel2(adWordsSpend),
       customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
-      customLabel4: parseEngineLabel(product.title),
+      customLabel4: parseEngineLabel(application, product.title),
       shippingWeight: formatWeight(variant.inventoryItem?.measurement?.weight),
       shippingLabel: buildShippingLabel({
         stateRestrictions,

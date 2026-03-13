@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { FeedPreviewTable } from "@/app/dashboard/feed-preview-table";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import { readRunArtifact } from "@/lib/operator-store";
 import type { SyncRunArtifact } from "@/lib/sync";
@@ -131,21 +132,12 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
         </div>
 
         {artifact.includedSample.length ? (
-          <div className="mt-6 grid gap-4">
-            {artifact.includedSample.map((row, index) => (
-              <article
-                key={`${row.offerId}-${index}`}
-                className="rounded-[1.4rem] border border-line bg-white/65 p-5"
-              >
-                <div className="flex flex-col gap-2 md:flex-row md:items-baseline md:justify-between">
-                  <p className="font-semibold text-foreground">{row.offerId}</p>
-                  <p className="text-sm text-muted">{row.productAttributes.title}</p>
-                </div>
-                <pre className="mt-4 overflow-x-auto rounded-2xl bg-[#1f1711] p-4 text-xs leading-6 text-[#f9f2e7]">
-                  {JSON.stringify(row, null, 2)}
-                </pre>
-              </article>
-            ))}
+          <div className="mt-6">
+            <FeedPreviewTable
+              records={artifact.includedSample}
+              emptyMessage="No included sample rows were stored for this run."
+              defaultColumnWidth={150}
+            />
           </div>
         ) : (
           <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
