@@ -1362,24 +1362,25 @@ async function buildDryRunPreview(params: {
     const shouldHydrateDetails =
       params.collectAllRecords || preview.length < params.artifactSampleLimit;
 
-    for (const batchIds of chunkArray(candidateIds, DETAIL_BATCH_SIZE)) {
-      if (!shouldHydrateDetails) {
-        break;
-      }
+    const detailPayloads = shouldHydrateDetails
+      ? await Promise.all(
+          chunkArray(candidateIds, DETAIL_BATCH_SIZE).map((batchIds) =>
+            runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
+              shop,
+              accessToken: token.accessToken,
+              query: SHOPIFY_PRODUCT_DETAILS_QUERY,
+              variables: {
+                ids: batchIds,
+                mediaLimit: DETAIL_MEDIA_LIMIT,
+                metafieldLimit: DETAIL_METAFIELD_LIMIT,
+                variantLimit: DETAIL_VARIANT_PAGE_SIZE,
+              },
+            }),
+          ),
+        )
+      : [];
 
-      const detailPayload: ShopifyProductDetailsPayload =
-        await runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
-          shop,
-          accessToken: token.accessToken,
-          query: SHOPIFY_PRODUCT_DETAILS_QUERY,
-          variables: {
-            ids: batchIds,
-            mediaLimit: DETAIL_MEDIA_LIMIT,
-            metafieldLimit: DETAIL_METAFIELD_LIMIT,
-            variantLimit: DETAIL_VARIANT_PAGE_SIZE,
-          },
-        });
-
+    for (const detailPayload of detailPayloads) {
       const detailedProducts =
         detailPayload.nodes?.filter(
           (product): product is ShopifyProductNode => Boolean(product),
