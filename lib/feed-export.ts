@@ -1,10 +1,5 @@
 import * as XLSX from "xlsx";
-import type {
-  ExcludedPreviewSample,
-  FeedPreviewRecord,
-  SyncExportResult,
-  SyncRunArtifact,
-} from "@/lib/sync";
+import type { FeedPreviewRecord, SyncExportResult } from "@/lib/sync";
 
 type BrettExportRow = {
   id: string;
@@ -200,19 +195,6 @@ function buildExclusionRows(exclusions: Record<string, number>) {
   }));
 }
 
-function buildExcludedSampleRows(rows: ExcludedPreviewSample[]) {
-  return rows.map((row) => ({
-    reason: row.reason,
-    product_id: row.productId,
-    variant_id: row.variantId ?? "",
-    offer_id: row.offerId ?? "",
-    handle: row.handle,
-    title: row.title,
-    variant_title: row.variantTitle ?? "",
-    sku: row.sku ?? "",
-  }));
-}
-
 export function buildPreviewExportWorkbook(result: SyncExportResult) {
   const workbook = XLSX.utils.book_new();
 
@@ -237,38 +219,6 @@ export function buildPreviewExportWorkbook(result: SyncExportResult) {
     }),
   );
   appendSheet(workbook, "exclusions", buildExclusionRows(result.exclusions));
-
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-}
-
-export function buildRunArtifactWorkbook(artifact: SyncRunArtifact) {
-  const workbook = XLSX.utils.book_new();
-
-  appendSheet(
-    workbook,
-    "included_sample",
-    artifact.includedSample.map(toBrettExportRow),
-    BRETT_EXPORT_HEADERS,
-  );
-  appendSheet(
-    workbook,
-    "summary",
-    buildSummaryRows({
-      source: "stored_run_sample",
-      mode: artifact.mode,
-      startedAt: artifact.startedAt,
-      finishedAt: artifact.finishedAt,
-      query: artifact.query,
-      lookbackStart: artifact.lookbackStart,
-      stats: artifact.stats,
-      notes: artifact.notes,
-    }),
-  );
-  appendSheet(
-    workbook,
-    "excluded_sample",
-    buildExcludedSampleRows(artifact.excludedSample),
-  );
 
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }

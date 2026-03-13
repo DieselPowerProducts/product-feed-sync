@@ -48,20 +48,12 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <a
-              href={`/api/dashboard/export/runs/${id}`}
-              className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
-            >
-              Download sample XLSX
-            </a>
-            <Link
-              href="/dashboard"
-              className="rounded-full border border-line bg-white/65 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white/90"
-            >
-              Back to dashboard
-            </Link>
-          </div>
+          <Link
+            href="/dashboard"
+            className="rounded-full border border-line bg-white/65 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white/90"
+          >
+            Back to dashboard
+          </Link>
         </div>
 
         <div className="mt-8 grid gap-4 md:grid-cols-4">
