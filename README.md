@@ -95,11 +95,6 @@ Use the `View sample` link in the dashboard to open `/dashboard/runs/:id`.
 
 ## Internal Operations
 
-Detailed route, API, sync, storage, environment, and deployment instructions have been moved to the internal operations guide:
+Detailed route, API, sync, storage, environment, and deployment instructions can be found in the internal operations guide:
 
 - [docs/INTERNAL_OPERATIONS.md](./docs/INTERNAL_OPERATIONS.md)
-
-Important:
-
-- This link is only access-controlled if the GitHub repository itself is private.
-- If the repo is public, the linked document is public too.
