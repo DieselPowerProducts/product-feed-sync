@@ -311,6 +311,56 @@ function stringifyCellValue(value: CellValue) {
   return String(value);
 }
 
+function isGooglePriceValue(value: CellValue): value is GooglePriceValue {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "amountMicros" in value &&
+      "currencyCode" in value,
+  );
+}
+
+function isGoogleWeightValue(value: CellValue): value is GoogleWeightValue {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "value" in value &&
+      "unit" in value,
+  );
+}
+
+function formatPriceValue(value: GooglePriceValue) {
+  const amount = Number(value.amountMicros) / 1_000_000;
+
+  if (!Number.isFinite(amount)) {
+    return stringifyCellValue(value);
+  }
+
+  return `${amount.toFixed(2)} ${value.currencyCode}`;
+}
+
+function formatWeightValue(value: GoogleWeightValue) {
+  const amount = Number.isInteger(value.value)
+    ? String(value.value)
+    : String(value.value);
+
+  return `${amount} ${value.unit}`;
+}
+
+function formatCellValue(value: CellValue) {
+  if (isGooglePriceValue(value)) {
+    return formatPriceValue(value);
+  }
+
+  if (isGoogleWeightValue(value)) {
+    return formatWeightValue(value);
+  }
+
+  return stringifyCellValue(value);
+}
+
 function getCellClassName() {
   return "block w-full overflow-hidden text-ellipsis whitespace-nowrap leading-6 text-muted";
 }
@@ -510,7 +560,8 @@ export function FeedPreviewTable(props: {
               >
                 {columns.map((column) => {
                   const rawValue = column.getValue(record);
-                  const value = stringifyCellValue(rawValue);
+                  const value = formatCellValue(rawValue);
+                  const rawTitle = stringifyCellValue(rawValue);
 
                   if (column.kind === "imageLink") {
                     return (
@@ -579,7 +630,7 @@ export function FeedPreviewTable(props: {
                         width: `${columnWidths[column.id]}px`,
                       }}
                     >
-                      <div className={getCellClassName()} title={value}>
+                      <div className={getCellClassName()} title={rawTitle || value}>
                         {value || "-"}
                       </div>
                     </td>
