@@ -302,7 +302,7 @@ export function FeedPreviewTable(props: {
     startWidth: number;
   } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
-  const [tableViewportHeight, setTableViewportHeight] = useState(400);
+  const [tableViewportMaxHeight, setTableViewportMaxHeight] = useState(480);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() =>
     buildDefaultColumnWidths(props.defaultColumnWidth),
   );
@@ -333,17 +333,12 @@ export function FeedPreviewTable(props: {
 
       const rect = viewport.getBoundingClientRect();
       const bottomPadding = window.innerWidth >= 1024 ? 32 : 20;
-      const topClamp = window.innerWidth >= 1024 ? 148 : 112;
-      const maxHeight = Math.max(
-        400,
-        Math.floor(window.innerHeight * (window.innerWidth >= 1024 ? 0.72 : 0.66)),
-      );
       const availableHeight = Math.floor(
-        window.innerHeight - Math.max(rect.top, topClamp) - bottomPadding,
+        window.innerHeight - Math.max(rect.top, 0) - bottomPadding,
       );
-      const nextHeight = Math.max(400, Math.min(maxHeight, availableHeight));
+      const nextHeight = Math.max(280, availableHeight);
 
-      setTableViewportHeight((current) =>
+      setTableViewportMaxHeight((current) =>
         current === nextHeight ? current : nextHeight,
       );
     }
@@ -439,7 +434,7 @@ export function FeedPreviewTable(props: {
       <div
         ref={tableViewportRef}
         className="relative overflow-auto"
-        style={{ height: `${tableViewportHeight}px` }}
+        style={{ maxHeight: `${tableViewportMaxHeight}px` }}
       >
         <table
           className="table-fixed text-left text-sm"
