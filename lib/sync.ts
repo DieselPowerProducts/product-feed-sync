@@ -31,17 +31,6 @@ const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
 
-// Match standalone product phrases so tags like "warrantyfriendlyupgrades"
-// do not trigger warranty or loop exclusions by substring accident.
-const EXCLUDED_TITLE_PATTERNS = [
-  { pattern: /\bbundle\b/, reason: "bundle_product" },
-  { pattern: /\bred\s+head\s+return\s+shipping\b/, reason: "return_shipping_product" },
-  { pattern: /\breturn\s+shipping\b/, reason: "return_shipping_product" },
-  { pattern: /\bextend\s+warranty\b/, reason: "warranty_product" },
-  { pattern: /\bwarranty\b/, reason: "warranty_product" },
-  { pattern: /\bloop\b/, reason: "loop_product" },
-] as const;
-
 const SHOPIFY_PRODUCT_SCAN_QUERY = `
   query ScanFeedProducts($first: Int!, $after: String, $query: String!) {
     products(first: $first, after: $after, sortKey: UPDATED_AT, reverse: true, query: $query) {
@@ -983,22 +972,6 @@ function findProductExclusionReason(product: ShopifyProductNode) {
     return "google_exclude_tag";
   }
 
-  const haystack = [
-    product.title,
-    product.vendor,
-    product.productType,
-    normalizedTags.join(" "),
-  ]
-    .map((value) => normalizeText(value))
-    .join(" ")
-    .toLowerCase();
-
-  for (const rule of EXCLUDED_TITLE_PATTERNS) {
-    if (rule.pattern.test(haystack)) {
-      return rule.reason;
-    }
-  }
-
   return null;
 }
 
@@ -1061,11 +1034,7 @@ function buildPreviewRecord(params: {
     return { excluded: "missing_image" };
   }
 
-  const priceAmount = parseAmount(variant.price);
-
-  if (priceAmount === null || priceAmount <= 0) {
-    return { excluded: "zero_price" };
-  }
+  const priceAmount = parseAmount(variant.price) ?? 0;
 
   const compareAtAmount = parseAmount(variant.compareAtPrice);
   const hasSalePrice =
