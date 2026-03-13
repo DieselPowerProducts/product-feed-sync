@@ -116,12 +116,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
             >
               Technical setup
             </Link>
-            <Link
-              href="/api/shopify/status"
-              className="rounded-full border border-line bg-white/65 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white/90"
-            >
-              Raw Shopify status
-            </Link>
             <form action={logoutAction}>
               <button
                 type="submit"
