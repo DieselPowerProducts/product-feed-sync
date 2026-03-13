@@ -31,13 +31,15 @@ const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
 
-const EXCLUDED_TITLE_PHRASES = [
-  { phrase: "bundle", reason: "bundle_product" },
-  { phrase: "red head return shipping", reason: "return_shipping_product" },
-  { phrase: "return shipping", reason: "return_shipping_product" },
-  { phrase: "extend warranty", reason: "warranty_product" },
-  { phrase: "warranty", reason: "warranty_product" },
-  { phrase: "loop", reason: "loop_product" },
+// Match standalone product phrases so tags like "warrantyfriendlyupgrades"
+// do not trigger warranty or loop exclusions by substring accident.
+const EXCLUDED_TITLE_PATTERNS = [
+  { pattern: /\bbundle\b/, reason: "bundle_product" },
+  { pattern: /\bred\s+head\s+return\s+shipping\b/, reason: "return_shipping_product" },
+  { pattern: /\breturn\s+shipping\b/, reason: "return_shipping_product" },
+  { pattern: /\bextend\s+warranty\b/, reason: "warranty_product" },
+  { pattern: /\bwarranty\b/, reason: "warranty_product" },
+  { pattern: /\bloop\b/, reason: "loop_product" },
 ] as const;
 
 const SHOPIFY_PRODUCT_SCAN_QUERY = `
@@ -991,8 +993,8 @@ function findProductExclusionReason(product: ShopifyProductNode) {
     .join(" ")
     .toLowerCase();
 
-  for (const rule of EXCLUDED_TITLE_PHRASES) {
-    if (haystack.includes(rule.phrase)) {
+  for (const rule of EXCLUDED_TITLE_PATTERNS) {
+    if (rule.pattern.test(haystack)) {
       return rule.reason;
     }
   }
