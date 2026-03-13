@@ -6,7 +6,7 @@ import {
   isValidOperatorSessionValue,
 } from "@/lib/operator-auth";
 import { getSyncSettings } from "@/lib/operator-store";
-import { runSync, type SyncMode } from "@/lib/sync";
+import { DEFAULT_PREVIEW_LIMIT, runSync, type SyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
   const settings = await getSyncSettings();
   const limit = readPreviewLimit(
     request.nextUrl.searchParams.get("limit"),
-    settings.previewLimit,
+    DEFAULT_PREVIEW_LIMIT,
   );
   const result = await runSync(mode, {
     trigger: "manual",

@@ -177,7 +177,7 @@ export function PreviewPanel(props: {
         </label>
 
         <label className="grid gap-2">
-          <span className="text-sm font-medium text-foreground">Rows</span>
+          <span className="text-sm font-medium text-foreground">Preview rows</span>
           <input
             value={limit}
             onChange={(event) => setLimit(event.target.value)}
@@ -233,8 +233,9 @@ export function PreviewPanel(props: {
 
       <div className="mt-4 text-sm leading-7 text-muted">
         Delta preview only shows products updated inside the current lookback
-        window. If it returns no rows, try <strong>Full preview</strong> or
-        increase the lookback days in the settings panel.
+        window. <strong>Preview rows</strong> only changes how many sample rows
+        are shown below. If it returns no rows, try <strong>Full preview</strong>{" "}
+        or increase the lookback days in the settings panel.
       </div>
 
       {error ? (
@@ -247,9 +248,9 @@ export function PreviewPanel(props: {
         <div className="mt-6 grid gap-5">
           <div className="flex flex-col gap-3 rounded-2xl border border-line bg-white/65 p-4 md:flex-row md:items-center md:justify-between">
             <div className="text-sm leading-7 text-muted">
-              Download the current <strong>{mode}</strong> export as an XLSX. This
-              reruns the selected mode and includes all matching rows, not just
-              the preview sample shown below.
+              The table below shows only the requested sample rows. Downloading
+              the current <strong>{mode}</strong> export reruns that same mode
+              and exports <strong>all</strong> matching rows as an XLSX.
             </div>
             <a
               href={`/api/dashboard/export/preview?mode=${mode}`}

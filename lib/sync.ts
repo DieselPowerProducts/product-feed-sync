@@ -19,7 +19,7 @@ const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
 const CRON_HOUR_UTC = 9;
 const CRON_MINUTE_UTC = 0;
-const DEFAULT_PREVIEW_LIMIT = 5;
+export const DEFAULT_PREVIEW_LIMIT = 5;
 const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
 const DETAIL_BATCH_SIZE = 5;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
@@ -477,7 +477,6 @@ function getDefaultSyncSettings(): SyncSettings {
     fullIntervalDays: env.fullIntervalDays,
     defaultDryRun: env.defaultDryRun,
     lookbackDays: env.lookbackDays,
-    previewLimit: DEFAULT_PREVIEW_LIMIT,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1596,7 +1595,7 @@ export async function runSync(
   const exhaustive = options.exhaustive ?? (options.trigger === "cron" || mode === "full");
   const previewLimit = Math.max(
     1,
-    Math.min(25, options.previewLimit ?? settings.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
+    Math.min(25, options.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
   );
   const artifactSampleLimit =
     options.persistHistory ?? true ? RUN_ARTIFACT_SAMPLE_LIMIT : previewLimit;

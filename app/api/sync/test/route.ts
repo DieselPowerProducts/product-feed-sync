@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { isAuthorizedManualRequest, readDryRunValue } from "@/lib/env";
-import { runSync, type SyncMode } from "@/lib/sync";
+import { DEFAULT_PREVIEW_LIMIT, runSync, type SyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ function readPreviewLimit(value: string | null) {
   const parsed = Number.parseInt(value ?? "", 10);
 
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return 5;
+    return DEFAULT_PREVIEW_LIMIT;
   }
 
   return Math.min(parsed, 25);

@@ -7,7 +7,11 @@ import {
   getSyncSettings,
 } from "@/lib/operator-store";
 import { getRuntimeShopifyConnection } from "@/lib/shopify";
-import { decideSyncMode, getUpcomingSyncDates } from "@/lib/sync";
+import {
+  DEFAULT_PREVIEW_LIMIT,
+  decideSyncMode,
+  getUpcomingSyncDates,
+} from "@/lib/sync";
 import { logoutAction, saveSettingsAction } from "@/app/dashboard/actions";
 
 type DashboardPageProps = {
@@ -174,33 +178,18 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </label>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  Delta lookback (days)
-                </span>
-                <input
-                  name="lookbackDays"
-                  type="number"
-                  min={1}
-                  defaultValue={settings.lookbackDays}
-                  className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-                />
-              </label>
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  Default preview rows
-                </span>
-                <input
-                  name="previewLimit"
-                  type="number"
-                  min={1}
-                  max={25}
-                  defaultValue={settings.previewLimit}
-                  className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-                />
-              </label>
-            </div>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Delta lookback (days)
+              </span>
+              <input
+                name="lookbackDays"
+                type="number"
+                min={1}
+                defaultValue={settings.lookbackDays}
+                className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
+              />
+            </label>
 
             <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm">
               <input
@@ -286,7 +275,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
       <section className="mt-8">
         <PreviewPanel
-          defaultPreviewLimit={settings.previewLimit}
+          defaultPreviewLimit={DEFAULT_PREVIEW_LIMIT}
           decisionReason={decision.reason}
         />
       </section>

@@ -26,7 +26,6 @@ export async function GET() {
       fullIntervalDays: settings.fullIntervalDays,
       lookbackDays: settings.lookbackDays,
       defaultDryRun: settings.defaultDryRun,
-      previewLimit: settings.previewLimit,
     },
     configuration: getConfigurationStatus(),
     storage: getOperatorStoreStatus(),

@@ -23,7 +23,6 @@ export interface SyncSettings {
   fullIntervalDays: number;
   defaultDryRun: boolean;
   lookbackDays: number;
-  previewLimit: number;
   updatedAt: string;
 }
 
@@ -76,7 +75,6 @@ function defaultSettings(): SyncSettings {
     fullIntervalDays: readPositiveInteger(env.fullIntervalDays, 15),
     defaultDryRun: env.defaultDryRun,
     lookbackDays: readPositiveInteger(env.lookbackDays, 8),
-    previewLimit: 5,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -111,10 +109,6 @@ function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
     lookbackDays: readPositiveInteger(
       Number(input?.lookbackDays),
       defaults.lookbackDays,
-    ),
-    previewLimit: Math.min(
-      25,
-      Math.max(1, readPositiveInteger(Number(input?.previewLimit), 5)),
     ),
     updatedAt: input?.updatedAt ?? defaults.updatedAt,
   } satisfies SyncSettings;

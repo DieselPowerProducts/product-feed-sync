@@ -22,7 +22,6 @@ export async function saveSettingsAction(formData: FormData) {
     deltaIntervalDays: readPositiveInteger(formData.get("deltaIntervalDays"), 7),
     fullIntervalDays: readPositiveInteger(formData.get("fullIntervalDays"), 15),
     lookbackDays: readPositiveInteger(formData.get("lookbackDays"), 8),
-    previewLimit: readPositiveInteger(formData.get("previewLimit"), 5),
     defaultDryRun:
       formData.get("defaultDryRun") === "on" ||
       formData.get("defaultDryRun") === "true",
