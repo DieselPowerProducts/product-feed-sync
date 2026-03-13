@@ -816,23 +816,47 @@ function parseEngineLabel(...sources: Array<string | null | undefined>) {
     return null;
   }
 
+  const explicitMatches = new Set<string>();
+
   if (/\bcummins\b/.test(haystack)) {
-    return "Cummins";
+    explicitMatches.add("Cummins");
   }
 
   if (/\bpower\s*stroke\b|\bpowerstroke\b/.test(haystack)) {
-    return "Powerstroke";
+    explicitMatches.add("Powerstroke");
   }
 
   if (/\bduramax\b/.test(haystack)) {
-    return "Duramax";
+    explicitMatches.add("Duramax");
   }
 
   if (/\beco\s*diesel\b|\becodiesel\b/.test(haystack)) {
-    return "Ecodiesel";
+    explicitMatches.add("Ecodiesel");
   }
 
-  return null;
+  if (explicitMatches.size === 1) {
+    return explicitMatches.values().next().value ?? null;
+  }
+
+  if (explicitMatches.size > 1) {
+    return null;
+  }
+
+  const inferredMatches = new Set<string>();
+
+  if (/\bram\b|\bdodge\b/.test(haystack)) {
+    inferredMatches.add("Cummins");
+  }
+
+  if (/\bford\b/.test(haystack)) {
+    inferredMatches.add("Powerstroke");
+  }
+
+  if (/\bgm\b|\bgmc\b|\bchevy\b|\bchevrolet\b/.test(haystack)) {
+    inferredMatches.add("Duramax");
+  }
+
+  return inferredMatches.size === 1 ? (inferredMatches.values().next().value ?? null) : null;
 }
 
 function normalizeCustomLabel2(value: string | null) {
