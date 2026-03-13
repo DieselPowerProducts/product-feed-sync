@@ -1135,6 +1135,33 @@ async function buildDryRunPreview(params: {
   collectAllRecords?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
+  const createProgressMessage = (
+    stage: "counting" | "scanning",
+    totalProductsValue: number | null,
+  ) => {
+    if (params.mode === "full") {
+      if (stage === "counting") {
+        return "Counting active Shopify products in the full catalog.";
+      }
+
+      if (typeof totalProductsValue === "number") {
+        return `Found ${totalProductsValue.toLocaleString()} matching products. Scanning and normalizing the full catalog.`;
+      }
+
+      return "Scanning and normalizing the full catalog.";
+    }
+
+    if (stage === "counting") {
+      return `Counting Shopify products updated in the last ${params.settings.lookbackDays} day(s).`;
+    }
+
+    if (typeof totalProductsValue === "number") {
+      return `Found ${totalProductsValue.toLocaleString()} products in the current delta window. Scanning and normalizing matches.`;
+    }
+
+    return `Scanning Shopify products updated in the last ${params.settings.lookbackDays} day(s).`;
+  };
+
   const shop = getConfiguredShopDomain();
 
   if (!shop) {
@@ -1167,8 +1194,34 @@ async function buildDryRunPreview(params: {
   let variantsConsidered = 0;
   let recordsPrepared = 0;
   let pagesScanned = 0;
+  let productsEvaluated = 0;
   let scanCompleted = false;
   let progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
+  let lastProgressEvaluated = 0;
+
+  const sendScanningProgress = async (force = false) => {
+    if (!params.onProgress) {
+      return;
+    }
+
+    if (!force && productsEvaluated - lastProgressEvaluated < 25) {
+      return;
+    }
+
+    lastProgressEvaluated = productsEvaluated;
+
+    await params.onProgress({
+      stage: "scanning",
+      exhaustive: params.exhaustive,
+      totalProducts: progressTargetTotal,
+      productsScanned: params.exhaustive
+        ? productsEvaluated
+        : Math.min(productsEvaluated, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
+      pagesScanned,
+      previewRows: preview.length,
+      message: createProgressMessage("scanning", totalProducts),
+    });
+  };
 
   if (params.onProgress) {
     await params.onProgress({
@@ -1178,7 +1231,7 @@ async function buildDryRunPreview(params: {
       productsScanned: 0,
       pagesScanned: 0,
       previewRows: 0,
-      message: "Counting matching Shopify products.",
+      message: createProgressMessage("counting", totalProducts),
     });
   }
 
@@ -1207,7 +1260,7 @@ async function buildDryRunPreview(params: {
       productsScanned: 0,
       pagesScanned: 0,
       previewRows: 0,
-      message: "Starting Shopify catalog scan.",
+      message: createProgressMessage("scanning", totalProducts),
     });
   }
 
@@ -1250,6 +1303,7 @@ async function buildDryRunPreview(params: {
           variantTitle: null,
           sku: null,
         });
+        productsEvaluated += 1;
         continue;
       }
 
@@ -1332,6 +1386,9 @@ async function buildDryRunPreview(params: {
           }
         }
 
+        productsEvaluated += 1;
+        await sendScanningProgress();
+
         if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
           break;
         }
@@ -1354,22 +1411,10 @@ async function buildDryRunPreview(params: {
       break;
     }
 
-    if (params.onProgress) {
-      await params.onProgress({
-        stage: "scanning",
-        exhaustive: params.exhaustive,
-        totalProducts: progressTargetTotal,
-        productsScanned: params.exhaustive
-          ? productsFetched
-          : Math.min(productsFetched, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
-        pagesScanned,
-        previewRows: preview.length,
-        message: params.exhaustive
-          ? `Scanned ${productsFetched.toLocaleString()} products so far.`
-          : "Sampling matching Shopify products.",
-      });
-    }
+    await sendScanningProgress();
   }
+
+  await sendScanningProgress(true);
 
   if (params.onProgress) {
     await params.onProgress({
@@ -1377,8 +1422,8 @@ async function buildDryRunPreview(params: {
       exhaustive: params.exhaustive,
       totalProducts: progressTargetTotal,
       productsScanned: params.exhaustive
-        ? productsFetched
-        : Math.min(productsFetched, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
+        ? productsEvaluated
+        : Math.min(productsEvaluated, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
       pagesScanned,
       previewRows: preview.length,
       message: scanCompleted

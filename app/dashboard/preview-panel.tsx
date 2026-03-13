@@ -62,7 +62,18 @@ export function PreviewPanel(props: {
     eventSourceRef.current?.close();
     setIsLoading(true);
     setError(null);
-    setProgress(null);
+    setProgress({
+      stage: "counting",
+      exhaustive: true,
+      totalProducts: null,
+      productsScanned: 0,
+      pagesScanned: 0,
+      previewRows: 0,
+      message:
+        mode === "full"
+          ? "Counting active Shopify products in the full catalog."
+          : "Counting Shopify products in the current delta lookback window.",
+    });
     setResult(null);
 
     const exhaustive = true;
@@ -99,9 +110,12 @@ export function PreviewPanel(props: {
         stage: "complete",
         exhaustive: payload.exhaustive,
         totalProducts: progressTotal,
-        productsScanned: payload.exhaustive
-          ? payload.stats.productsFetched
-          : Math.min(payload.stats.productsFetched, progressTotal ?? payload.stats.pageSize),
+        productsScanned:
+          payload.stats.scanCompleted && typeof progressTotal === "number"
+            ? progressTotal
+            : payload.exhaustive
+              ? payload.stats.productsFetched
+              : Math.min(payload.stats.productsFetched, progressTotal ?? payload.stats.pageSize),
         pagesScanned: payload.stats.pagesScanned,
         previewRows: payload.preview.length,
         message: payload.stats.scanCompleted
