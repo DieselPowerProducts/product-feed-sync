@@ -127,10 +127,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <div className="flex items-end justify-between gap-4">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
-                Cadence settings
+                Schedule settings
               </p>
               <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-                Control when syncs become due
+                Schedule when syncs become due
               </h2>
             </div>
             <p className="text-sm text-muted">Last updated {formatTimestamp(settings.updatedAt)}</p>
