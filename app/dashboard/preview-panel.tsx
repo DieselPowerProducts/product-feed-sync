@@ -58,6 +58,7 @@ export function PreviewPanel(props: {
   decisionReason: string;
 }) {
   const [mode, setMode] = useState<"delta" | "full">("delta");
+  const [runIntent, setRunIntent] = useState<"preview" | "full">("preview");
   const [limit, setLimit] = useState(String(props.defaultPreviewLimit));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,15 +73,16 @@ export function PreviewPanel(props: {
     };
   }, []);
 
-  async function runPreview() {
+  async function runPreview(intent: "preview" | "full") {
     activeRunIdRef.current += 1;
     const runId = activeRunIdRef.current;
     eventSourceRef.current?.close();
+    setRunIntent(intent);
     setIsLoading(true);
     setError(null);
     setProgress({
       stage: "counting",
-      exhaustive: true,
+      exhaustive: intent === "full",
       totalProducts: null,
       productsScanned: 0,
       pagesScanned: 0,
@@ -88,11 +90,13 @@ export function PreviewPanel(props: {
       message:
         mode === "full"
           ? "Counting active Shopify products in the full catalog."
-          : "Counting Shopify products in the current delta lookback window.",
+          : intent === "full"
+            ? "Counting Shopify products in the current delta window for the full export."
+            : "Counting Shopify products in the current delta lookback window.",
     });
     setResult(null);
 
-    const exhaustive = true;
+    const exhaustive = intent === "full";
     const source = new EventSource(
       `/api/dashboard/preview-stream?mode=${mode}&limit=${encodeURIComponent(limit)}&exhaustive=${exhaustive ? "1" : "0"}`,
     );
@@ -193,7 +197,7 @@ export function PreviewPanel(props: {
         <p className="text-sm text-muted">{props.decisionReason}</p>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-[1fr_1fr_auto]">
+      <div className="mt-6 grid gap-4 md:grid-cols-[1fr_1fr_auto_auto]">
         <label className="grid gap-2">
           <span className="text-sm font-medium text-foreground">Preview mode</span>
           <select
@@ -223,17 +227,35 @@ export function PreviewPanel(props: {
         <div className="flex items-end">
           <button
             type="button"
-            onClick={() => void runPreview()}
+            onClick={() => void runPreview("preview")}
+            disabled={isLoading}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-foreground disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isLoading && runIntent === "preview" ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-foreground border-t-transparent" />
+                Inspecting preview
+              </>
+            ) : (
+              "Inspect Preview"
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={() => void runPreview("full")}
             disabled={isLoading}
             className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#1f1711] px-5 py-3 text-sm font-semibold text-[#f9f2e7] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isLoading ? (
+            {isLoading && runIntent === "full" ? (
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f9f2e7] border-t-transparent" />
-                {mode === "full" ? "Preparing full preview" : "Preparing delta preview"}
+                {mode === "full" ? "Preparing full catalog" : "Preparing full delta"}
               </>
             ) : (
-              "Run preview"
+              "Inspect Full"
             )}
           </button>
         </div>
