@@ -247,13 +247,6 @@ export function PreviewPanel(props: {
         </div>
       </div>
 
-      <div className="mt-4 text-sm leading-7 text-muted">
-        Delta preview only shows products updated inside the current lookback
-        window. <strong>Preview rows</strong> only changes how many sample rows
-        are shown below. Running a preview prepares the matching export from the
-        same scan, so the download uses the exact same dataset.
-      </div>
-
       {error ? (
         <div className="mt-6 rounded-[1.4rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-4 text-sm leading-7 text-[#7d3d10]">
           {error}
