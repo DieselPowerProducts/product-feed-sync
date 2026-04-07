@@ -148,7 +148,12 @@ function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {
   };
 }
 
-function appendSheet(workbook: XLSX.WorkBook, name: string, rows: unknown[], header?: string[]) {
+function appendSheet(
+  workbook: unknown,
+  name: string,
+  rows: unknown[],
+  header?: string[],
+) {
   const worksheet = XLSX.utils.json_to_sheet(rows, header ? { header } : undefined);
   XLSX.utils.book_append_sheet(workbook, worksheet, name);
 }
@@ -195,13 +200,28 @@ function buildExclusionRows(exclusions: Record<string, number>) {
   }));
 }
 
+function buildFeedExportRows(result: SyncExportResult) {
+  return result.rows.map(toFeedExportRow);
+}
+
+export function buildPreviewExportCsv(result: SyncExportResult) {
+  const worksheet = XLSX.utils.json_to_sheet(buildFeedExportRows(result), {
+    header: FEED_EXPORT_HEADERS,
+  });
+
+  return `\uFEFF${XLSX.utils.sheet_to_csv(worksheet, {
+    FS: ",",
+    RS: "\r\n",
+  })}`;
+}
+
 export function buildPreviewExportWorkbook(result: SyncExportResult) {
   const workbook = XLSX.utils.book_new();
 
   appendSheet(
     workbook,
     "feed_export",
-    result.rows.map(toFeedExportRow),
+    buildFeedExportRows(result),
     FEED_EXPORT_HEADERS,
   );
   appendSheet(

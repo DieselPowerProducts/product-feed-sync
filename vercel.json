@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/sync",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/test-save",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/test-save",
+      "schedule": "0 15 * * *"
     }
   ]
 }

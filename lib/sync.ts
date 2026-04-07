@@ -1731,6 +1731,7 @@ function toHistoryEntry(
     query: result.query,
     lookbackStart: result.lookbackStart,
     artifactId,
+    exportArtifactId: result.exportArtifactId ?? null,
     notes: result.notes.slice(0, 8),
     stats: result.stats,
   };
@@ -1892,7 +1893,7 @@ export async function runSync(
       },
       exclusions: {},
       preview: [],
-      exportArtifactId,
+      exportArtifactId: null,
     } satisfies SyncRunResult;
 
     if (options.persistHistory ?? true) {

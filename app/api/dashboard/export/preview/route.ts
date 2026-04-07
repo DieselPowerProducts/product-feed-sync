@@ -1,6 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { buildPreviewExportWorkbook } from "@/lib/feed-export";
+import {
+  buildPreviewExportCsv,
+  buildPreviewExportWorkbook,
+} from "@/lib/feed-export";
 import {
   getOperatorSessionCookieName,
   isOperatorAuthConfigured,
@@ -19,8 +22,16 @@ function isSupportedMode(
   return value === "delta" || value === "full";
 }
 
-function buildFilename(mode: Exclude<SyncMode, "idle">, startedAt: string) {
-  return `dpp-feed-${mode}-export-${startedAt.replaceAll(":", "-")}.xlsx`;
+function isSupportedFormat(value: string | null): value is "csv" | "xlsx" {
+  return value === "csv" || value === "xlsx";
+}
+
+function buildFilename(
+  mode: Exclude<SyncMode, "idle">,
+  startedAt: string,
+  format: "csv" | "xlsx",
+) {
+  return `dpp-feed-${mode}-export-${startedAt.replaceAll(":", "-")}.${format}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -41,6 +52,8 @@ export async function GET(request: NextRequest) {
 
   const exportId = request.nextUrl.searchParams.get("id");
   const mode = request.nextUrl.searchParams.get("mode");
+  const requestedFormat = request.nextUrl.searchParams.get("format");
+  const format = isSupportedFormat(requestedFormat) ? requestedFormat : "xlsx";
 
   if (exportId) {
     const artifact = await readPreviewExportArtifact<SyncExportResult>(exportId);
@@ -55,16 +68,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const workbook = buildPreviewExportWorkbook(artifact);
+    const payload =
+      format === "csv"
+        ? buildPreviewExportCsv(artifact)
+        : buildPreviewExportWorkbook(artifact);
 
-    return new NextResponse(workbook, {
+    return new NextResponse(payload, {
       status: 200,
       headers: {
         "Content-Type":
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          format === "csv"
+            ? "text/csv; charset=utf-8"
+            : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${buildFilename(
           artifact.mode,
           artifact.startedAt,
+          format,
         )}"`,
         "Cache-Control": "no-store",
       },

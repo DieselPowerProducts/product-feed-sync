@@ -3,6 +3,7 @@ import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
   getOperatorStoreStatus,
+  getScheduledTestExport,
   getSyncHistory,
   getSyncSettings,
 } from "@/lib/operator-store";
@@ -69,6 +70,43 @@ function prettifyStorageMode(mode: "blob" | "local" | "memory") {
   return "In-memory";
 }
 
+function getSavedMessage(saved: string | undefined) {
+  switch (saved) {
+    case "settings":
+      return {
+        tone: "success" as const,
+        text: "Dashboard settings were saved.",
+      };
+    case "test-export-ready":
+      return {
+        tone: "success" as const,
+        text: "The test save finished and the downloadable file is ready below.",
+      };
+    case "test-export-scheduled":
+      return {
+        tone: "success" as const,
+        text: "A one-time test save was scheduled for tomorrow at 7:00 AM Pacific.",
+      };
+    case "test-export-cancelled":
+      return {
+        tone: "success" as const,
+        text: "The pending test save was cancelled.",
+      };
+    case "test-export-invalid":
+      return {
+        tone: "error" as const,
+        text: "Choose either a delta or full test save.",
+      };
+    case "test-export-failed":
+      return {
+        tone: "error" as const,
+        text: "The test save run failed. Check run history below for the failure details.",
+      };
+    default:
+      return null;
+  }
+}
+
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage(props: DashboardPageProps) {
@@ -76,15 +114,21 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const searchParams = props.searchParams ? await props.searchParams : {};
   const now = new Date();
-  const [settings, history, storeStatus, shopifyConnection] = await Promise.all([
+  const [settings, history, storeStatus, shopifyConnection, scheduledTestExport] =
+    await Promise.all([
     getSyncSettings(),
     getSyncHistory(20),
     Promise.resolve(getOperatorStoreStatus()),
     getRuntimeShopifyConnection(),
+    getScheduledTestExport(),
   ]);
   const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
-  const saved = getSearchParam(searchParams, "saved") === "settings";
+  const saved = getSearchParam(searchParams, "saved");
+  const flashMessage = getSavedMessage(saved);
+  const downloadableTestExports = history.filter(
+    (entry) => entry.exportArtifactId,
+  );
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
@@ -127,9 +171,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </div>
         </div>
 
-        {saved ? (
-          <div className="mt-6 rounded-[1.4rem] border border-[rgba(29,111,85,0.18)] bg-[rgba(29,111,85,0.08)] px-4 py-3 text-sm text-success">
-            Dashboard settings were saved.
+        {flashMessage ? (
+          <div
+            className={
+              flashMessage.tone === "success"
+                ? "mt-6 rounded-[1.4rem] border border-[rgba(29,111,85,0.18)] bg-[rgba(29,111,85,0.08)] px-4 py-3 text-sm text-success"
+                : "mt-6 rounded-[1.4rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-3 text-sm text-[#7d3d10]"
+            }
+          >
+            {flashMessage.text}
           </div>
         ) : null}
 
@@ -305,12 +355,12 @@ export default async function DashboardPage(props: DashboardPageProps) {
               Run history
             </p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-              Previous sync attempts
+              Previous sync and test-save attempts
             </h2>
           </div>
           <p className="text-sm text-muted">
             Google writes are disabled, so this currently reflects preview and
-            sync attempts only.
+            sync-side QA runs only.
           </p>
         </div>
 
@@ -358,12 +408,30 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         </p>
                         <p className="mt-2 text-muted">{entry.notes[0] ?? "No notes"}</p>
                         {entry.artifactId ? (
-                          <Link
-                            href={`/dashboard/runs/${entry.artifactId}`}
-                            className="mt-3 inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                          >
-                            View sample
-                          </Link>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Link
+                              href={`/dashboard/runs/${entry.artifactId}`}
+                              className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                            >
+                              View sample
+                            </Link>
+                            {entry.exportArtifactId ? (
+                              <>
+                                <a
+                                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&format=csv`}
+                                  className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                                >
+                                  Download CSV
+                                </a>
+                                <a
+                                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&format=xlsx`}
+                                  className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                                >
+                                  Download XLSX
+                                </a>
+                              </>
+                            ) : null}
+                          </div>
                         ) : null}
                       </td>
                       <td className="px-4 py-4 text-muted">
@@ -388,6 +456,210 @@ export default async function DashboardPage(props: DashboardPageProps) {
             No sync runs have been recorded yet.
           </div>
         )}
+      </section>
+
+      <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
+              Test save
+            </p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
+              Save a full or delta comparison file
+            </h2>
+          </div>
+          <p className="max-w-2xl text-sm leading-7 text-muted">
+            Use this for a one-time QA export before approval. CSV is the
+            closest match for comparing against the current GMC file, and the
+            XLSX download also includes summary and exclusion sheets.
+          </p>
+        </div>
+
+        <div className="mt-6 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+          <article className="rounded-[1.5rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              One-time export
+            </p>
+            <form
+              action="/api/dashboard/test-save"
+              method="post"
+              className="mt-4 grid gap-4"
+            >
+              <input type="hidden" name="intent" value="save" />
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-foreground">
+                  Test mode
+                </span>
+                <select
+                  name="mode"
+                  defaultValue={scheduledTestExport?.mode ?? "full"}
+                  className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
+                >
+                  <option value="full">Full product test save</option>
+                  <option value="delta">Delta product test save</option>
+                </select>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/75 px-4 py-4 text-sm leading-7 text-foreground">
+                <input
+                  name="scheduleTomorrow"
+                  type="checkbox"
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+                Run tomorrow at 7:00 AM Pacific and keep the saved file ready to
+                download in the morning.
+              </label>
+
+              <p className="text-sm leading-7 text-muted">
+                Leave the checkbox off to run immediately and save the file now.
+                Scheduled test saves use the dedicated morning cron and replace
+                any existing pending one-time test.
+              </p>
+
+              <button
+                type="submit"
+                className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+              >
+                Save test file
+              </button>
+            </form>
+          </article>
+
+          <article className="rounded-[1.5rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Pending schedule
+            </p>
+            {scheduledTestExport ? (
+              <div className="mt-4 grid gap-4">
+                <div className="rounded-[1.25rem] border border-line bg-white/80 p-4">
+                  <p className="text-2xl font-semibold tracking-[-0.04em] text-foreground">
+                    {scheduledTestExport.mode === "full"
+                      ? "Full product test save"
+                      : "Delta product test save"}
+                  </p>
+                  <p className="mt-3 text-sm leading-7 text-muted">
+                    Scheduled for {formatTimestamp(scheduledTestExport.runAt)}.
+                    The file will appear below as soon as the overnight job
+                    finishes.
+                  </p>
+                </div>
+
+                <form action="/api/dashboard/test-save" method="post">
+                  <input type="hidden" name="intent" value="cancel" />
+                  <button
+                    type="submit"
+                    className="rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white"
+                  >
+                    Cancel scheduled test
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-[1.25rem] border border-dashed border-line bg-white/55 p-4 text-sm leading-7 text-muted">
+                No overnight test save is scheduled right now.
+              </div>
+            )}
+          </article>
+        </div>
+
+        <div className="mt-8">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
+                Saved files
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                Download ready-to-compare exports
+              </h3>
+            </div>
+            <p className="text-sm text-muted">
+              These are persisted one-time test saves from the dashboard or the
+              morning scheduler.
+            </p>
+          </div>
+
+          {downloadableTestExports.length ? (
+            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
+                    <tr>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3">Type</th>
+                      <th className="px-4 py-3">Counts</th>
+                      <th className="px-4 py-3">Source</th>
+                      <th className="px-4 py-3">Downloads</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {downloadableTestExports.map((entry) => (
+                      <tr
+                        key={`${entry.id}-export`}
+                        className="border-b border-line/70 align-top last:border-b-0"
+                      >
+                        <td className="px-4 py-4">
+                          <p className="font-semibold text-foreground">
+                            {formatTimestamp(entry.finishedAt)}
+                          </p>
+                          <p className="mt-2 text-muted">
+                            Started {formatTimestamp(entry.startedAt)}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="font-semibold text-foreground">
+                            {entry.mode}
+                          </p>
+                          <p className="mt-2 text-muted">
+                            {entry.dryRun ? "dry run" : "live mode flag"}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4 text-muted">
+                          <p>Products: {entry.stats.productsFetched}</p>
+                          <p className="mt-2">
+                            Records: {entry.stats.recordsPrepared}
+                          </p>
+                          <p className="mt-2">Excluded: {entry.stats.excluded}</p>
+                        </td>
+                        <td className="px-4 py-4 text-muted">
+                          <p>{entry.trigger === "cron" ? "scheduled" : "manual"}</p>
+                          <p className="mt-2">{entry.scope}</p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=csv`}
+                              className="inline-flex rounded-full bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition-transform hover:-translate-y-0.5"
+                            >
+                              Download CSV
+                            </a>
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=xlsx`}
+                              className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                            >
+                              Download XLSX
+                            </a>
+                            {entry.artifactId ? (
+                              <Link
+                                href={`/dashboard/runs/${entry.artifactId}`}
+                                className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                              >
+                                View sample
+                              </Link>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
+              No saved comparison files are ready yet.
+            </div>
+          )}
+        </div>
       </section>
     </main>
   );

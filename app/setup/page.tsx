@@ -33,6 +33,10 @@ const starterRoutes = [
     description: "Vercel cron entrypoint. It decides whether today is a delta run, a full run, or a no-op day.",
   },
   {
+    path: "/api/cron/test-save",
+    description: "Morning Vercel cron entrypoint for one-time saved delta/full comparison exports requested from the dashboard.",
+  },
+  {
     path: "/api/sync/test?mode=delta&dryRun=1&limit=5",
     description: "Protected manual test route for live Shopify previews outside the dashboard.",
   },
@@ -102,6 +106,7 @@ export default function SetupPage() {
                 <div className="mt-4 grid gap-3 text-sm leading-7 text-[#e9d5c0]">
                   <p>Shared-password operator dashboard is live.</p>
                   <p>Shopify client-credentials connect, preview fetches, and run history are wired.</p>
+                  <p>One-time saved delta/full comparison exports can now run immediately or the next morning from the dashboard.</p>
                   <p>Google Merchant writes and full-catalog bulk export still need to be implemented.</p>
                 </div>
               </div>

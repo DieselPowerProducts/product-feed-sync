@@ -44,6 +44,7 @@ export interface SyncHistoryEntry {
   query: string;
   lookbackStart: string | null;
   artifactId?: string | null;
+  exportArtifactId?: string | null;
   notes: string[];
   stats: {
     pageSize: number;
@@ -58,9 +59,16 @@ export interface SyncHistoryEntry {
   };
 }
 
+export interface ScheduledTestExport {
+  mode: "delta" | "full";
+  runAt: string;
+  requestedAt: string;
+}
+
 interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
+  scheduledTestExport: ScheduledTestExport | null;
 }
 
 type StorageMode = "blob" | "local" | "memory";
@@ -89,6 +97,7 @@ function defaultState(): OperatorState {
   return {
     settings: defaultSettings(),
     history: [],
+    scheduledTestExport: null,
   };
 }
 
@@ -120,6 +129,36 @@ function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
   } satisfies SyncSettings;
 }
 
+function sanitizeScheduledTestExport(
+  input: Partial<ScheduledTestExport> | null | undefined,
+) {
+  if (!input) {
+    return null;
+  }
+
+  const mode = input.mode === "delta" || input.mode === "full" ? input.mode : null;
+  const runAt =
+    typeof input.runAt === "string" &&
+    Number.isFinite(new Date(input.runAt).getTime())
+      ? new Date(input.runAt).toISOString()
+      : null;
+  const requestedAt =
+    typeof input.requestedAt === "string" &&
+    Number.isFinite(new Date(input.requestedAt).getTime())
+      ? new Date(input.requestedAt).toISOString()
+      : null;
+
+  if (!mode || !runAt || !requestedAt) {
+    return null;
+  }
+
+  return {
+    mode,
+    runAt,
+    requestedAt,
+  } satisfies ScheduledTestExport;
+}
+
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   return {
     settings: sanitizeSettings(input?.settings),
@@ -127,9 +166,11 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
       ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
           ...entry,
           artifactId: entry.artifactId ?? null,
+          exportArtifactId: entry.exportArtifactId ?? null,
           notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
         }))
       : [],
+    scheduledTestExport: sanitizeScheduledTestExport(input?.scheduledTestExport),
   } satisfies OperatorState;
 }
 
@@ -332,6 +373,39 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
     ...state,
     history: [entry, ...state.history].slice(0, HISTORY_LIMIT),
   });
+}
+
+export async function getScheduledTestExport() {
+  const state = await readState();
+  return sanitizeScheduledTestExport(state.scheduledTestExport);
+}
+
+export async function saveScheduledTestExport(input: ScheduledTestExport) {
+  const state = await readState();
+  const scheduledTestExport = sanitizeScheduledTestExport(input);
+
+  if (!scheduledTestExport) {
+    throw new Error("Scheduled test export is invalid.");
+  }
+
+  await writeState({
+    ...state,
+    scheduledTestExport,
+  });
+
+  return scheduledTestExport;
+}
+
+export async function clearScheduledTestExport() {
+  const state = await readState();
+  const scheduledTestExport = sanitizeScheduledTestExport(state.scheduledTestExport);
+
+  await writeState({
+    ...state,
+    scheduledTestExport: null,
+  });
+
+  return scheduledTestExport;
 }
 
 export async function writeRunArtifact(id: string, artifact: unknown) {

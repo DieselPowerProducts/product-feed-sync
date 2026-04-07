@@ -303,12 +303,20 @@ export function PreviewPanel(props: {
                 export from the same scan. The table below only shows the
                 requested sample rows.
               </div>
-              <a
-                href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}`}
-                className="inline-flex items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
-              >
-                Download {result.mode === "full" ? "Full" : "Delta"} XLSX
-              </a>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}&format=csv`}
+                  className="inline-flex items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+                >
+                  Download Feed CSV
+                </a>
+                <a
+                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}&format=xlsx`}
+                  className="inline-flex items-center justify-center rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-accent-strong transition-colors hover:bg-white"
+                >
+                  Download Audit XLSX
+                </a>
+              </div>
             </div>
           ) : null}
 

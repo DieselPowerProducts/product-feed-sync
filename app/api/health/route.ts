@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getConfigurationStatus } from "@/lib/env";
-import { getOperatorStoreStatus, getSyncSettings } from "@/lib/operator-store";
+import {
+  getOperatorStoreStatus,
+  getScheduledTestExport,
+  getSyncSettings,
+} from "@/lib/operator-store";
 import {
   getRuntimeShopifyConnection,
   getShopifyConfigurationStatus,
@@ -12,7 +16,10 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const now = new Date();
-  const settings = await getSyncSettings();
+  const [settings, scheduledTestExport] = await Promise.all([
+    getSyncSettings(),
+    getScheduledTestExport(),
+  ]);
   const shopifyConnection = await getRuntimeShopifyConnection();
 
   return NextResponse.json({
@@ -20,12 +27,16 @@ export async function GET() {
     service: "dpp-product-feed-sync",
     timestamp: now.toISOString(),
     cadence: {
-      cronScheduleUtc: "0 9 * * *",
+      cronSchedulesUtc: {
+        sync: ["0 9 * * *"],
+        testSave: ["0 14 * * *", "0 15 * * *"],
+      },
       anchorDate: settings.anchorDate,
       deltaIntervalDays: settings.deltaIntervalDays,
       fullIntervalDays: settings.fullIntervalDays,
       lookbackDays: settings.lookbackDays,
       defaultDryRun: settings.defaultDryRun,
+      scheduledTestExport,
     },
     configuration: getConfigurationStatus(),
     storage: getOperatorStoreStatus(),

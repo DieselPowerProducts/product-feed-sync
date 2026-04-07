@@ -29,6 +29,9 @@ If the repository is public, this file is public too.
 - `/api/cron/sync`
   - Protected cron entrypoint.
   - Runs daily, then decides whether to execute `delta`, `full`, or skip.
+- `/api/cron/test-save`
+  - Protected cron entrypoint for one-time saved dashboard exports.
+  - Runs at both `14:00 UTC` and `15:00 UTC` so `7:00 AM America/Los_Angeles` is covered across daylight-saving changes.
 - `/api/sync/test`
   - Protected manual sync route.
   - Persists run history and stored artifacts.
@@ -64,9 +67,20 @@ Notes:
 - `dryRun=0` changes the run flag, but this build still does not perform Google writes.
 - Manual runs persist history and save up to 50 included rows plus 50 excluded rows in the run artifact.
 
+## Dashboard one-time test saves
+
+Use the `Test save` panel at the bottom of `/dashboard` when you need a persisted comparison file.
+
+Capabilities:
+
+- Save either a `delta` or `full` export immediately
+- Schedule a one-time export for the next `7:00 AM America/Los_Angeles`
+- Download the saved feed as `CSV` for GMC comparison
+- Download the same saved export as `XLSX` with summary and exclusion sheets
+
 ## Cron behavior
 
-The cron route is designed for a Vercel cron job scheduled daily at `09:00 UTC`.
+The main sync cron route is designed for a Vercel cron job scheduled daily at `09:00 UTC`.
 
 How the cron path works:
 
@@ -81,6 +95,7 @@ Important:
 - Cron always runs on the daily schedule.
 - Dashboard settings decide whether that day produces a delta run, full run, or no-op.
 - The app currently stores preview artifacts, not live Merchant Center writes.
+- One-time dashboard test saves use the separate `/api/cron/test-save` morning check.
 
 ## Feed rules implemented so far
 
@@ -117,7 +132,7 @@ Copy `.env.example` to `.env.local` for local development.
 Core app settings:
 
 - `NEXT_PUBLIC_APP_URL`: app base URL
-- `CRON_SECRET`: required in production for `/api/cron/sync`
+- `CRON_SECRET`: required in production for `/api/cron/sync` and `/api/cron/test-save`
 - `MANUAL_SYNC_TOKEN`: required in production for `/api/sync/test`
 - `DASHBOARD_PASSWORD`: enables operator login
 - `DASHBOARD_SESSION_SECRET`: recommended dedicated session-signing secret
