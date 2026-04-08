@@ -14,6 +14,7 @@ import {
   getUpcomingSyncDates,
 } from "@/lib/sync";
 import { logoutAction, saveSettingsAction } from "@/app/dashboard/actions";
+import { formatPacificDateTimeInputValue } from "@/lib/test-save";
 
 type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -97,6 +98,11 @@ function getSavedMessage(saved: string | undefined) {
         tone: "error" as const,
         text: "Choose either a delta or full test save.",
       };
+    case "test-export-invalid-effective-time":
+      return {
+        tone: "error" as const,
+        text: "The selected Pacific test date/time was invalid.",
+      };
     case "test-export-failed":
       return {
         tone: "error" as const,
@@ -129,6 +135,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const downloadableTestExports = history.filter(
     (entry) => entry.exportArtifactId,
   );
+  const requestedTestAt = getSearchParam(searchParams, "testAt");
+  const defaultTestSaveDateTime = requestedTestAt
+    ? formatPacificDateTimeInputValue(requestedTestAt)
+    : "";
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
@@ -501,19 +511,39 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </label>
 
               <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/75 px-4 py-4 text-sm leading-7 text-foreground">
+                <span className="grid flex-1 gap-2">
+                  <span className="text-sm font-medium text-foreground">
+                    Effective Pacific date/time
+                  </span>
+                  <input
+                    name="effectiveAt"
+                    type="datetime-local"
+                    defaultValue={defaultTestSaveDateTime}
+                    className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
+                  />
+                </span>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/75 px-4 py-4 text-sm leading-7 text-foreground">
                 <input
                   name="scheduleTomorrow"
                   type="checkbox"
                   className="h-4 w-4 accent-[var(--accent)]"
                 />
-                Run tomorrow at 7:00 AM Pacific and keep the saved file ready to
-                download in the morning.
+                Actually schedule this saved file for tomorrow at 7:00 AM
+                Pacific instead of running it right now.
               </label>
 
               <p className="text-sm leading-7 text-muted">
-                Leave the checkbox off to run immediately and save the file now.
-                Scheduled test saves use the dedicated morning cron and replace
-                any existing pending one-time test.
+                Leave the schedule box off to run immediately. The date/time
+                field lets you simulate a future Pacific timestamp right now so
+                you can test tomorrow&apos;s delta window without waiting.
+              </p>
+
+              <p className="text-sm leading-7 text-muted">
+                The overnight scheduler still only runs once each morning on
+                the current Vercel setup. Scheduled test saves replace any
+                existing pending one-time test.
               </p>
 
               <button

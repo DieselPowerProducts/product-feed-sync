@@ -113,6 +113,48 @@ function zonedTimeToUtc(
   return new Date(utcMs);
 }
 
+function padDatePart(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+export function formatPacificDateTimeInputValue(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+
+  const parts = getTimeZoneDateParts(date, TEST_SAVE_TIME_ZONE);
+
+  return `${parts.year}-${padDatePart(parts.month)}-${padDatePart(
+    parts.day,
+  )}T${padDatePart(parts.hour)}:${padDatePart(parts.minute)}`;
+}
+
+export function parsePacificDateTimeInputValue(value: string) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+
+  return zonedTimeToUtc(
+    {
+      year: Number.parseInt(yearText, 10),
+      month: Number.parseInt(monthText, 10),
+      day: Number.parseInt(dayText, 10),
+      hour: Number.parseInt(hourText, 10),
+      minute: Number.parseInt(minuteText, 10),
+      second: 0,
+    },
+    TEST_SAVE_TIME_ZONE,
+  );
+}
+
 export function getTomorrowPacificTestExportRunAt(now = new Date()) {
   const pacificNow = getTimeZoneDateParts(now, TEST_SAVE_TIME_ZONE);
   const pacificTodayUtcDate = new Date(

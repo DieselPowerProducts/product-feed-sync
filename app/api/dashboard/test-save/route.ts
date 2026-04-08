@@ -11,7 +11,10 @@ import {
   saveScheduledTestExport,
 } from "@/lib/operator-store";
 import { runSync, type SyncMode } from "@/lib/sync";
-import { getTomorrowPacificTestExportRunAt } from "@/lib/test-save";
+import {
+  getTomorrowPacificTestExportRunAt,
+  parsePacificDateTimeInputValue,
+} from "@/lib/test-save";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,6 +63,14 @@ export async function POST(request: NextRequest) {
   const scheduleTomorrow =
     formData.get("scheduleTomorrow") === "on" ||
     formData.get("scheduleTomorrow") === "true";
+  const effectiveAtValue = String(formData.get("effectiveAt") ?? "").trim();
+  const effectiveNow = effectiveAtValue
+    ? parsePacificDateTimeInputValue(effectiveAtValue)
+    : null;
+
+  if (effectiveAtValue && !effectiveNow) {
+    return redirectToDashboard(request, "test-export-invalid-effective-time");
+  }
 
   if (scheduleTomorrow) {
     await saveScheduledTestExport({
@@ -76,6 +87,7 @@ export async function POST(request: NextRequest) {
     dryRun: settings.defaultDryRun,
     settings,
     prepareExportArtifact: true,
+    effectiveNow: effectiveNow ?? undefined,
   });
 
   return redirectToDashboard(

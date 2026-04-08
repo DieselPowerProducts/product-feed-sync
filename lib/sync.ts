@@ -997,6 +997,7 @@ function buildSyncScope(
 function buildSearchQuery(
   mode: Exclude<SyncMode, "idle">,
   settings: SyncSettings,
+  now = new Date(),
 ) {
   if (mode === "full") {
     return {
@@ -1005,7 +1006,9 @@ function buildSearchQuery(
     };
   }
 
-  const lookbackStart = new Date(Date.now() - settings.lookbackDays * MS_PER_DAY);
+  const lookbackStart = new Date(
+    now.getTime() - settings.lookbackDays * MS_PER_DAY,
+  );
 
   return {
     query: `status:active updated_at:>'${lookbackStart.toISOString()}'`,
@@ -1237,6 +1240,7 @@ async function buildDryRunPreview(params: {
   artifactSampleLimit: number;
   settings: SyncSettings;
   exhaustive: boolean;
+  effectiveNow?: Date;
   collectAllRecords?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
@@ -1288,7 +1292,11 @@ async function buildDryRunPreview(params: {
   const storefrontBaseUrl = connection.connected
     ? connection.shop?.primaryDomainUrl ?? null
     : null;
-  const search = buildSearchQuery(params.mode, params.settings);
+  const search = buildSearchQuery(
+    params.mode,
+    params.settings,
+    params.effectiveNow,
+  );
   const preview: FeedPreviewRecord[] = [];
   const allRecords: FeedPreviewRecord[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
@@ -1747,6 +1755,7 @@ export async function runSync(
     settings?: SyncSettings;
     exhaustive?: boolean;
     prepareExportArtifact?: boolean;
+    effectiveNow?: Date;
     onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
   },
 ): Promise<SyncRunResult> {
@@ -1772,6 +1781,7 @@ export async function runSync(
       artifactSampleLimit,
       settings,
       exhaustive,
+      effectiveNow: options.effectiveNow,
       collectAllRecords: options.prepareExportArtifact,
       onProgress: options.onProgress,
     });
@@ -1785,6 +1795,11 @@ export async function runSync(
       previewLimit,
       scanCompleted: previewRun.scanCompleted,
     });
+    if (options.effectiveNow) {
+      notes.unshift(
+        `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
+      );
+    }
 
     const result = {
       ok: true,
@@ -1861,7 +1876,7 @@ export async function runSync(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown sync execution error.";
-    const search = buildSearchQuery(mode, settings);
+    const search = buildSearchQuery(mode, settings, options.effectiveNow);
 
     const result = {
       ok: false,
@@ -1874,6 +1889,11 @@ export async function runSync(
       finishedAt: new Date().toISOString(),
       configuration,
       notes: [
+        ...(options.effectiveNow
+          ? [
+              `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
+            ]
+          : []),
         `Shopify preview fetch failed: ${message}`,
         "The current code only supports read-only Shopify dry runs. No Google writes were attempted.",
       ],
