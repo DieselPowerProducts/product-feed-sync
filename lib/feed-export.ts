@@ -119,7 +119,7 @@ function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {
     description: record.productAttributes.description,
     link: record.productAttributes.link,
     image_link: record.productAttributes.imageLink,
-    additional_image_link: record.productAttributes.additionalImageLinks.join("\n"),
+    additional_image_link: record.productAttributes.additionalImageLinks.join(","),
     availability: record.productAttributes.availability.toLowerCase(),
     price: formatPriceValue(record.productAttributes.price),
     sale_price: formatPriceValue(record.productAttributes.salePrice),
