@@ -111,7 +111,7 @@ Confirmed mapping and exclusion rules in the current code:
 - `customLabel2` maps ad-spend values `Above Average` -> `a`, `Average` -> `b`, and `Below Average` -> `c`
 - `customLabel4` checks `application` first to infer engine fitment from explicit engine names or make keywords (`Ram`/`Dodge` -> `Cummins`, `Ford` -> `Powerstroke`, `GM`/`GMC`/`Chevy` -> `Duramax`), then falls back to the last 8 words of the title when `application` has no engine signal
 - `shippingLabel` prioritizes state restrictions, then `fast_free`, then `Standard`
-- exclude `Google_Exclude` items, variants with no image, and variants with no storefront URL
+- exclude `Google_Exclude` items, `seo.hidden` items, variants with no image, and variants with no storefront URL
 
 ## Storage behavior
 

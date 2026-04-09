@@ -3,7 +3,7 @@ import Link from "next/link";
 const pipeline = [
   {
     title: "1. Ingest from Shopify",
-    body: "Fetch active, published, and eligible products from Shopify, then filter out Google_Exclude items and variants missing critical feed data.",
+    body: "Fetch active, published, and eligible products from Shopify, then filter out Google_Exclude items, seo.hidden items, and variants missing critical feed data.",
   },
   {
     title: "2. Transform for GMC",

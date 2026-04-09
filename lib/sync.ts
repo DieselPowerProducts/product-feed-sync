@@ -51,6 +51,9 @@ const SHOPIFY_PRODUCT_SCAN_QUERY = `
           tags
           updatedAt
           onlineStoreUrl
+          seoHidden: metafield(namespace: "seo", key: "hidden") {
+            value
+          }
         }
       }
     }
@@ -72,6 +75,9 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
         tags
         updatedAt
         onlineStoreUrl
+        seoHidden: metafield(namespace: "seo", key: "hidden") {
+          value
+        }
         googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
           value
         }
@@ -470,6 +476,7 @@ interface ShopifyProductNode {
   tags: string[];
   updatedAt: string;
   onlineStoreUrl: string | null;
+  seoHidden?: ShopifySingleMetafieldValue | null;
   googleMpn?: ShopifySingleMetafieldValue | null;
   application?: ShopifySingleMetafieldValue | null;
   featuredMedia?: ShopifyMediaNode | null;
@@ -972,6 +979,10 @@ function findProductExclusionReason(product: ShopifyProductNode) {
     return "google_exclude_tag";
   }
 
+  if (normalizeBooleanish(product.seoHidden?.value ?? null)) {
+    return "seo_hidden_metafield";
+  }
+
   return null;
 }
 
@@ -1054,7 +1065,9 @@ function buildPreviewRecord(params: {
     return { excluded: "missing_online_store_url" };
   }
 
-  const additionalImageLinks = productMediaUrls.filter((url) => url !== primaryImage);
+  const additionalImageLinks = productMediaUrls
+    .filter((url) => url !== primaryImage)
+    .slice(0, 10);
   const mergedMetafields = new Map(productMetafields);
 
   for (const [key, value] of variantMetafields.entries()) {

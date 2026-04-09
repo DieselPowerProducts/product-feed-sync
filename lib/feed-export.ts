@@ -9,6 +9,7 @@ type FeedExportRow = {
   image_link: string;
   additional_image_link: string;
   availability: string;
+  condition: string;
   price: string;
   sale_price: string;
   google_product_category: string;
@@ -43,6 +44,7 @@ const FEED_EXPORT_HEADERS: Array<keyof FeedExportRow> = [
   "image_link",
   "additional_image_link",
   "availability",
+  "condition",
   "price",
   "sale_price",
   "google_product_category",
@@ -121,6 +123,7 @@ function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {
     image_link: record.productAttributes.imageLink,
     additional_image_link: record.productAttributes.additionalImageLinks.join(","),
     availability: record.productAttributes.availability.toLowerCase(),
+    condition: record.productAttributes.condition.toLowerCase(),
     price: formatPriceValue(record.productAttributes.price),
     sale_price: formatPriceValue(record.productAttributes.salePrice),
     google_product_category: record.productAttributes.googleProductCategory ?? "",
