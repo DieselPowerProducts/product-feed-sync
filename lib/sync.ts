@@ -25,11 +25,138 @@ const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
 const DETAIL_BATCH_SIZE = 150;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
 const DETAIL_MEDIA_LIMIT = SHOPIFY_PAGE_SIZE;
-const DETAIL_METAFIELD_LIMIT = 20;
 const ENGINE_LABEL_TITLE_TAIL_WORDS = 8;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
+
+// Feed-critical metafields stay explicit so feed output never depends on
+// Shopify metafield ordering or pagination.
+const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
+        googleProductTypeCustom: metafield(namespace: "custom", key: "google_product_type") {
+          value
+        }
+        googleProductTypeFeed: metafield(namespace: "feed", key: "google_product_type") {
+          value
+        }
+        googleProductTypeGoogle: metafield(namespace: "google", key: "google_product_type") {
+          value
+        }
+        productTypeCustom: metafield(namespace: "custom", key: "product_type") {
+          value
+        }
+        productTypeFeed: metafield(namespace: "feed", key: "product_type") {
+          value
+        }
+        productTypeGoogle: metafield(namespace: "google", key: "product_type") {
+          value
+        }
+        gtinCustom: metafield(namespace: "custom", key: "gtin") {
+          value
+        }
+        gtinFeed: metafield(namespace: "feed", key: "gtin") {
+          value
+        }
+        gtinGoogle: metafield(namespace: "google", key: "gtin") {
+          value
+        }
+        stateRestrictionsCustom: metafield(namespace: "custom", key: "state_restrictions") {
+          value
+        }
+        stateRestrictionsFeed: metafield(namespace: "feed", key: "state_restrictions") {
+          value
+        }
+        adWordsSpendCustom: metafield(namespace: "custom", key: "ad_words_spend") {
+          value
+        }
+        adWordsSpendFeed: metafield(namespace: "feed", key: "ad_words_spend") {
+          value
+        }
+        quickShipCustom: metafield(namespace: "custom", key: "quick_ship") {
+          value
+        }
+        quickShipFeed: metafield(namespace: "feed", key: "quick_ship") {
+          value
+        }
+        colorCustom: metafield(namespace: "custom", key: "color") {
+          value
+        }
+        colorFeed: metafield(namespace: "feed", key: "color") {
+          value
+        }
+        sizeCustom: metafield(namespace: "custom", key: "size") {
+          value
+        }
+        sizeFeed: metafield(namespace: "feed", key: "size") {
+          value
+        }
+        applicationFeed: metafield(namespace: "feed", key: "application") {
+          value
+        }
+`;
+
+const EXPLICIT_VARIANT_FEED_METAFIELDS = `
+              googleProductTypeCustom: metafield(namespace: "custom", key: "google_product_type") {
+                value
+              }
+              googleProductTypeFeed: metafield(namespace: "feed", key: "google_product_type") {
+                value
+              }
+              googleProductTypeGoogle: metafield(namespace: "google", key: "google_product_type") {
+                value
+              }
+              productTypeCustom: metafield(namespace: "custom", key: "product_type") {
+                value
+              }
+              productTypeFeed: metafield(namespace: "feed", key: "product_type") {
+                value
+              }
+              productTypeGoogle: metafield(namespace: "google", key: "product_type") {
+                value
+              }
+              gtinCustom: metafield(namespace: "custom", key: "gtin") {
+                value
+              }
+              gtinFeed: metafield(namespace: "feed", key: "gtin") {
+                value
+              }
+              gtinGoogle: metafield(namespace: "google", key: "gtin") {
+                value
+              }
+              stateRestrictionsCustom: metafield(namespace: "custom", key: "state_restrictions") {
+                value
+              }
+              stateRestrictionsFeed: metafield(namespace: "feed", key: "state_restrictions") {
+                value
+              }
+              adWordsSpendCustom: metafield(namespace: "custom", key: "ad_words_spend") {
+                value
+              }
+              adWordsSpendFeed: metafield(namespace: "feed", key: "ad_words_spend") {
+                value
+              }
+              quickShipCustom: metafield(namespace: "custom", key: "quick_ship") {
+                value
+              }
+              quickShipFeed: metafield(namespace: "feed", key: "quick_ship") {
+                value
+              }
+              colorCustom: metafield(namespace: "custom", key: "color") {
+                value
+              }
+              colorFeed: metafield(namespace: "feed", key: "color") {
+                value
+              }
+              sizeCustom: metafield(namespace: "custom", key: "size") {
+                value
+              }
+              sizeFeed: metafield(namespace: "feed", key: "size") {
+                value
+              }
+              applicationFeed: metafield(namespace: "feed", key: "application") {
+                value
+              }
+`;
 
 const SHOPIFY_PRODUCT_SCAN_QUERY = `
   query ScanFeedProducts($first: Int!, $after: String, $query: String!) {
@@ -61,7 +188,7 @@ const SHOPIFY_PRODUCT_SCAN_QUERY = `
 `;
 
 const SHOPIFY_PRODUCT_DETAILS_QUERY = `
-  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $metafieldLimit: Int!, $variantLimit: Int!) {
+  query FeedProductDetails($ids: [ID!]!, $mediaLimit: Int!, $variantLimit: Int!) {
     nodes(ids: $ids) {
       ... on Product {
         id
@@ -84,6 +211,7 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
         application: metafield(namespace: "custom", key: "application") {
           value
         }
+${EXPLICIT_PRODUCT_FEED_METAFIELDS}
         featuredMedia {
           __typename
           ... on MediaImage {
@@ -101,16 +229,6 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
                   url
                 }
               }
-            }
-          }
-        }
-        metafields(first: $metafieldLimit) {
-          edges {
-            node {
-              namespace
-              key
-              value
-              type
             }
           }
         }
@@ -141,6 +259,7 @@ const SHOPIFY_PRODUCT_DETAILS_QUERY = `
               application: metafield(namespace: "custom", key: "application") {
                 value
               }
+${EXPLICIT_VARIANT_FEED_METAFIELDS}
               image {
                 url
               }
@@ -194,6 +313,7 @@ const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
             application: metafield(namespace: "custom", key: "application") {
               value
             }
+${EXPLICIT_VARIANT_FEED_METAFIELDS}
             image {
               url
             }
@@ -405,15 +525,32 @@ interface ShopifyConnection<T> {
   pageInfo?: ShopifyPageInfo;
 }
 
-interface ShopifyMetafieldNode {
-  namespace: string;
-  key: string;
-  value: string;
-  type: string;
-}
-
 interface ShopifySingleMetafieldValue {
   value: string | null;
+}
+
+interface ShopifyExplicitFeedMetafields {
+  googleProductTypeCustom?: ShopifySingleMetafieldValue | null;
+  googleProductTypeFeed?: ShopifySingleMetafieldValue | null;
+  googleProductTypeGoogle?: ShopifySingleMetafieldValue | null;
+  productTypeCustom?: ShopifySingleMetafieldValue | null;
+  productTypeFeed?: ShopifySingleMetafieldValue | null;
+  productTypeGoogle?: ShopifySingleMetafieldValue | null;
+  gtinCustom?: ShopifySingleMetafieldValue | null;
+  gtinFeed?: ShopifySingleMetafieldValue | null;
+  gtinGoogle?: ShopifySingleMetafieldValue | null;
+  stateRestrictionsCustom?: ShopifySingleMetafieldValue | null;
+  stateRestrictionsFeed?: ShopifySingleMetafieldValue | null;
+  adWordsSpendCustom?: ShopifySingleMetafieldValue | null;
+  adWordsSpendFeed?: ShopifySingleMetafieldValue | null;
+  quickShipCustom?: ShopifySingleMetafieldValue | null;
+  quickShipFeed?: ShopifySingleMetafieldValue | null;
+  colorCustom?: ShopifySingleMetafieldValue | null;
+  colorFeed?: ShopifySingleMetafieldValue | null;
+  sizeCustom?: ShopifySingleMetafieldValue | null;
+  sizeFeed?: ShopifySingleMetafieldValue | null;
+  application?: ShopifySingleMetafieldValue | null;
+  applicationFeed?: ShopifySingleMetafieldValue | null;
 }
 
 interface ShopifyMediaNode {
@@ -438,7 +575,7 @@ interface ShopifySelectedOption {
   value: string;
 }
 
-interface ShopifyVariantNode {
+interface ShopifyVariantNode extends ShopifyExplicitFeedMetafields {
   id: string;
   legacyResourceId: string | null;
   title: string;
@@ -451,11 +588,9 @@ interface ShopifyVariantNode {
   inventoryQuantity: number | null;
   availableForSale: boolean;
   googleMpn?: ShopifySingleMetafieldValue | null;
-  application?: ShopifySingleMetafieldValue | null;
   image?: {
     url?: string | null;
   } | null;
-  metafields?: ShopifyConnection<ShopifyMetafieldNode>;
   inventoryItem?: {
     measurement?: {
       weight?: ShopifyWeight | null;
@@ -464,7 +599,7 @@ interface ShopifyVariantNode {
   } | null;
 }
 
-interface ShopifyProductNode {
+interface ShopifyProductNode extends ShopifyExplicitFeedMetafields {
   id: string;
   legacyResourceId: string | null;
   title: string;
@@ -478,10 +613,8 @@ interface ShopifyProductNode {
   onlineStoreUrl: string | null;
   seoHidden?: ShopifySingleMetafieldValue | null;
   googleMpn?: ShopifySingleMetafieldValue | null;
-  application?: ShopifySingleMetafieldValue | null;
   featuredMedia?: ShopifyMediaNode | null;
   media?: ShopifyConnection<ShopifyMediaNode>;
-  metafields?: ShopifyConnection<ShopifyMetafieldNode>;
   variants?: ShopifyConnection<ShopifyVariantNode>;
 }
 
@@ -676,39 +809,17 @@ function normalizeGoogleProductCategory(value: string | null) {
   return resolveGoogleProductCategoryId(normalized);
 }
 
-function collectMetafieldLookup(
-  ...metafieldSets: Array<ShopifyConnection<ShopifyMetafieldNode> | null | undefined>
+function readExplicitMetafieldValue(
+  owners: Array<ShopifyExplicitFeedMetafields | null | undefined>,
+  keys: Array<keyof ShopifyExplicitFeedMetafields>,
 ) {
-  const lookup = new Map<string, string>();
+  for (const owner of owners) {
+    for (const key of keys) {
+      const value = normalizeText(owner?.[key]?.value ?? null);
 
-  for (const metafield of metafieldSets.flatMap((set) => connectionNodes(set))) {
-    const value = normalizeText(metafield.value);
-
-    if (!value) {
-      continue;
-    }
-
-    const namespacedKey = `${metafield.namespace}.${metafield.key}`.toLowerCase();
-    const simpleKey = metafield.key.toLowerCase();
-
-    if (!lookup.has(namespacedKey)) {
-      lookup.set(namespacedKey, value);
-    }
-
-    if (!lookup.has(simpleKey)) {
-      lookup.set(simpleKey, value);
-    }
-  }
-
-  return lookup;
-}
-
-function readMappedValue(lookup: Map<string, string>, keys: string[]) {
-  for (const key of keys) {
-    const value = lookup.get(key.toLowerCase());
-
-    if (value) {
-      return value;
+      if (value) {
+        return value;
+      }
     }
   }
 
@@ -1031,15 +1142,12 @@ function buildPreviewRecord(params: {
   product: ShopifyProductNode;
   variant: ShopifyVariantNode;
   storefrontBaseUrl: string | null;
-  productMetafields: Map<string, string>;
   productMediaUrls: string[];
 }): FeedPreviewRecord | { excluded: string } {
-  const { product, variant, storefrontBaseUrl, productMetafields, productMediaUrls } =
-    params;
+  const { product, variant, storefrontBaseUrl, productMediaUrls } = params;
 
   const variantId = resolveLegacyId(variant.legacyResourceId, variant.id);
   const productId = resolveLegacyId(product.legacyResourceId, product.id);
-  const variantMetafields = collectMetafieldLookup(variant.metafields);
   const primaryImage =
     pickFirstNonEmpty(variant.image?.url ?? null, productMediaUrls[0] ?? null) ??
     null;
@@ -1068,66 +1176,62 @@ function buildPreviewRecord(params: {
   const additionalImageLinks = productMediaUrls
     .filter((url) => url !== primaryImage)
     .slice(0, 10);
-  const mergedMetafields = new Map(productMetafields);
-
-  for (const [key, value] of variantMetafields.entries()) {
-    if (!mergedMetafields.has(key)) {
-      mergedMetafields.set(key, value);
-    }
-  }
+  const metafieldOwners = [variant, product];
 
   const googleProductCategory = normalizeGoogleProductCategory(
-    readMappedValue(mergedMetafields, [
-      "google_product_type",
-      "custom.google_product_type",
-      "feed.google_product_type",
+    readExplicitMetafieldValue(metafieldOwners, [
+      "googleProductTypeCustom",
+      "googleProductTypeFeed",
+      "googleProductTypeGoogle",
     ]),
   );
   const productType =
-    readMappedValue(mergedMetafields, [
-      "product_type",
-      "custom.product_type",
-      "feed.product_type",
+    readExplicitMetafieldValue(metafieldOwners, [
+      "productTypeCustom",
+      "productTypeFeed",
+      "productTypeGoogle",
     ]) ?? normalizeText(product.productType) ?? null;
   const gtin =
     normalizeGtin(variant.barcode) ??
-    normalizeGtin(readMappedValue(mergedMetafields, ["gtin"]));
+    normalizeGtin(
+      readExplicitMetafieldValue(metafieldOwners, [
+        "gtinCustom",
+        "gtinFeed",
+        "gtinGoogle",
+      ]),
+    );
   const mpn = pickFirstNonEmpty(
     variant.googleMpn?.value ?? null,
     product.googleMpn?.value ?? null,
   );
-  const stateRestrictions = readMappedValue(mergedMetafields, [
-    "state_restrictions",
-    "custom.state_restrictions",
-    "feed.state_restrictions",
+  const stateRestrictions = readExplicitMetafieldValue(metafieldOwners, [
+    "stateRestrictionsCustom",
+    "stateRestrictionsFeed",
   ]);
-  const adWordsSpend = readMappedValue(mergedMetafields, [
-    "ad_words_spend",
-    "custom.ad_words_spend",
-    "feed.ad_words_spend",
+  const adWordsSpend = readExplicitMetafieldValue(metafieldOwners, [
+    "adWordsSpendCustom",
+    "adWordsSpendFeed",
   ]);
-  const quickShip = readMappedValue(mergedMetafields, [
-    "quick_ship",
-    "custom.quick_ship",
-    "feed.quick_ship",
+  const quickShip = readExplicitMetafieldValue(metafieldOwners, [
+    "quickShipCustom",
+    "quickShipFeed",
   ]);
-  const application = pickFirstNonEmpty(
-    variant.application?.value ?? null,
-    product.application?.value ?? null,
-    readMappedValue(mergedMetafields, ["custom.application", "application"]),
-  );
+  const application = readExplicitMetafieldValue(metafieldOwners, [
+    "application",
+    "applicationFeed",
+  ]);
   const brand = pickFirstNonEmpty(product.vendor);
   const apparelProduct = isApparelProductType(productType, product.productType);
   const color = apparelProduct
     ? pickFirstNonEmpty(
         readSelectedOptionValue(variant.selectedOptions, ["color", "colour"]),
-        readMappedValue(mergedMetafields, ["color", "custom.color", "feed.color"]),
+        readExplicitMetafieldValue(metafieldOwners, ["colorCustom", "colorFeed"]),
       )
     : null;
   const size = apparelProduct
     ? pickFirstNonEmpty(
         readSelectedOptionValue(variant.selectedOptions, ["size"]),
-        readMappedValue(mergedMetafields, ["size", "custom.size", "feed.size"]),
+        readExplicitMetafieldValue(metafieldOwners, ["sizeCustom", "sizeFeed"]),
       )
     : null;
   const productTypeValues = productType ? [productType] : [];
@@ -1449,7 +1553,6 @@ async function buildDryRunPreview(params: {
               variables: {
                 ids: batchIds,
                 mediaLimit: DETAIL_MEDIA_LIMIT,
-                metafieldLimit: DETAIL_METAFIELD_LIMIT,
                 variantLimit: DETAIL_VARIANT_PAGE_SIZE,
               },
             }),
@@ -1465,7 +1568,6 @@ async function buildDryRunPreview(params: {
 
       for (const product of detailedProducts) {
         const productId = resolveLegacyId(product.legacyResourceId, product.id);
-        const productMetafields = collectMetafieldLookup(product.metafields);
         const productMediaUrls = collectMediaUrls(product);
         const initialVariants = connectionNodes<ShopifyVariantNode>(product.variants);
         const variants = product.variants?.pageInfo?.hasNextPage
@@ -1485,7 +1587,6 @@ async function buildDryRunPreview(params: {
             product,
             variant,
             storefrontBaseUrl,
-            productMetafields,
             productMediaUrls,
           });
 
