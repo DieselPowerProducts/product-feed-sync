@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { get, put } from "@vercel/blob";
+import { del, get, put } from "@vercel/blob";
 import { env } from "@/lib/env";
 
 const STATE_BLOB_PATH = "dpp-product-feed-sync/operator-state.json";
@@ -244,6 +244,14 @@ async function writeBlobArtifact(id: string, artifact: unknown) {
   });
 }
 
+async function deleteBlobArtifact(id: string) {
+  try {
+    await del(getRunArtifactBlobPath(id));
+  } catch {
+    // Ignore missing artifacts so delete remains idempotent.
+  }
+}
+
 async function readLocalState() {
   try {
     const raw = await readFile(LOCAL_STATE_PATH, "utf8");
@@ -276,6 +284,14 @@ async function writeLocalArtifact(id: string, artifact: unknown) {
   );
 }
 
+async function deleteLocalArtifact(id: string) {
+  try {
+    await unlink(getLocalRunArtifactPath(id));
+  } catch {
+    // Ignore missing artifacts so delete remains idempotent.
+  }
+}
+
 async function readMemoryState() {
   return globalThis.__dppOperatorState ?? defaultState();
 }
@@ -294,6 +310,14 @@ async function writeMemoryArtifact(id: string, artifact: unknown) {
   }
 
   globalThis.__dppRunArtifacts[id] = artifact;
+}
+
+async function deleteMemoryArtifact(id: string) {
+  if (!globalThis.__dppRunArtifacts) {
+    return;
+  }
+
+  delete globalThis.__dppRunArtifacts[id];
 }
 
 async function readState() {
@@ -368,11 +392,18 @@ export async function getSyncHistory(limit = 20) {
 
 export async function appendSyncHistory(entry: SyncHistoryEntry) {
   const state = await readState();
+  const combinedHistory = [entry, ...state.history];
+  const retainedHistory = combinedHistory.slice(0, HISTORY_LIMIT);
+  const evictedHistory = combinedHistory.slice(HISTORY_LIMIT);
 
   await writeState({
     ...state,
-    history: [entry, ...state.history].slice(0, HISTORY_LIMIT),
+    history: retainedHistory,
   });
+
+  if (evictedHistory.length) {
+    await deleteHistoryArtifacts(evictedHistory);
+  }
 }
 
 export async function getScheduledTestExport() {
@@ -461,6 +492,14 @@ async function writeBlobPreviewExport(id: string, artifact: unknown) {
   });
 }
 
+async function deleteBlobPreviewExport(id: string) {
+  try {
+    await del(getPreviewExportBlobPath(id));
+  } catch {
+    // Ignore missing artifacts so delete remains idempotent.
+  }
+}
+
 async function readLocalPreviewExport<T>(id: string) {
   try {
     const raw = await readFile(getLocalPreviewExportPath(id), "utf8");
@@ -479,6 +518,14 @@ async function writeLocalPreviewExport(id: string, artifact: unknown) {
   );
 }
 
+async function deleteLocalPreviewExport(id: string) {
+  try {
+    await unlink(getLocalPreviewExportPath(id));
+  } catch {
+    // Ignore missing artifacts so delete remains idempotent.
+  }
+}
+
 async function readMemoryPreviewExport<T>(id: string) {
   return (globalThis.__dppRunArtifacts?.[`preview-export:${id}`] as T | undefined) ?? null;
 }
@@ -489,6 +536,58 @@ async function writeMemoryPreviewExport(id: string, artifact: unknown) {
   }
 
   globalThis.__dppRunArtifacts[`preview-export:${id}`] = artifact;
+}
+
+async function deleteMemoryPreviewExport(id: string) {
+  if (!globalThis.__dppRunArtifacts) {
+    return;
+  }
+
+  delete globalThis.__dppRunArtifacts[`preview-export:${id}`];
+}
+
+async function deleteRunArtifactById(id: string) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    await deleteBlobArtifact(id);
+    return;
+  }
+
+  if (mode === "local") {
+    await deleteLocalArtifact(id);
+    return;
+  }
+
+  await deleteMemoryArtifact(id);
+}
+
+async function deletePreviewExportArtifactById(id: string) {
+  const mode = getStorageMode();
+
+  if (mode === "blob") {
+    await deleteBlobPreviewExport(id);
+    return;
+  }
+
+  if (mode === "local") {
+    await deleteLocalPreviewExport(id);
+    return;
+  }
+
+  await deleteMemoryPreviewExport(id);
+}
+
+async function deleteHistoryArtifacts(entries: SyncHistoryEntry[]) {
+  for (const entry of entries) {
+    if (entry.artifactId) {
+      await deleteRunArtifactById(entry.artifactId);
+    }
+
+    if (entry.exportArtifactId) {
+      await deletePreviewExportArtifactById(entry.exportArtifactId);
+    }
+  }
 }
 
 export async function writePreviewExportArtifact(id: string, artifact: unknown) {
@@ -519,4 +618,21 @@ export async function readPreviewExportArtifact<T = unknown>(id: string) {
   }
 
   return readMemoryPreviewExport<T>(id);
+}
+
+export async function deleteSyncHistoryEntry(id: string) {
+  const state = await readState();
+  const entry = state.history.find((historyEntry) => historyEntry.id === id) ?? null;
+
+  if (!entry) {
+    return null;
+  }
+
+  await writeState({
+    ...state,
+    history: state.history.filter((historyEntry) => historyEntry.id !== id),
+  });
+  await deleteHistoryArtifacts([entry]);
+
+  return entry;
 }

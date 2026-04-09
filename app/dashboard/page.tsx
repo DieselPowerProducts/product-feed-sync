@@ -13,7 +13,11 @@ import {
   decideSyncMode,
   getUpcomingSyncDates,
 } from "@/lib/sync";
-import { logoutAction, saveSettingsAction } from "@/app/dashboard/actions";
+import {
+  deleteHistoryEntryAction,
+  logoutAction,
+  saveSettingsAction,
+} from "@/app/dashboard/actions";
 import { formatPacificDateTimeInputValue } from "@/lib/test-save";
 
 type DashboardPageProps = {
@@ -107,6 +111,16 @@ function getSavedMessage(saved: string | undefined) {
       return {
         tone: "error" as const,
         text: "The test save run failed. Check run history below for the failure details.",
+      };
+    case "history-deleted":
+      return {
+        tone: "success" as const,
+        text: "The saved run and any associated export files were deleted.",
+      };
+    case "history-delete-invalid":
+      return {
+        tone: "error" as const,
+        text: "The selected run could not be deleted.",
       };
     default:
       return null;
@@ -441,6 +455,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
                                 </a>
                               </>
                             ) : null}
+                            <form action={deleteHistoryEntryAction}>
+                              <input type="hidden" name="entryId" value={entry.id} />
+                              <button
+                                type="submit"
+                                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                              >
+                                Delete run
+                              </button>
+                            </form>
                           </div>
                         ) : null}
                       </td>
@@ -676,6 +699,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
                                 View sample
                               </Link>
                             ) : null}
+                            <form action={deleteHistoryEntryAction}>
+                              <input type="hidden" name="entryId" value={entry.id} />
+                              <button
+                                type="submit"
+                                className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                              >
+                                Delete
+                              </button>
+                            </form>
                           </div>
                         </td>
                       </tr>
