@@ -423,14 +423,24 @@ export default async function DashboardPage(props: DashboardPageProps) {
                       <td className="px-4 py-4">
                         <p
                           className={
-                            entry.ok
-                              ? "font-semibold text-success"
-                              : "font-semibold text-accent-strong"
+                            !entry.ok || (entry.stats.validationIssues ?? 0) > 0
+                              ? "font-semibold text-accent-strong"
+                              : "font-semibold text-success"
                           }
                         >
-                          {entry.ok ? "success" : "failed"}
+                          {!entry.ok
+                            ? "failed"
+                            : (entry.stats.validationIssues ?? 0) > 0
+                              ? "needs attention"
+                              : "success"}
                         </p>
                         <p className="mt-2 text-muted">{entry.notes[0] ?? "No notes"}</p>
+                        {(entry.stats.validationIssues ?? 0) > 0 ? (
+                          <p className="mt-2 font-mono text-xs uppercase tracking-[0.16em] text-accent-strong">
+                            {entry.stats.validationIssues} validation issue
+                            {(entry.stats.validationIssues ?? 0) === 1 ? "" : "s"}
+                          </p>
+                        ) : null}
                         {entry.artifactId ? (
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Link
@@ -471,6 +481,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         <p>Products: {entry.stats.productsFetched}</p>
                         <p className="mt-2">Records: {entry.stats.recordsPrepared}</p>
                         <p className="mt-2">Excluded: {entry.stats.excluded}</p>
+                        <p className="mt-2">
+                          Validation: {entry.stats.validationIssues ?? 0}
+                        </p>
                       </td>
                       <td className="px-4 py-4 text-muted">
                         <p>{entry.scope}</p>

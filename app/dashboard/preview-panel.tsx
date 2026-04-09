@@ -21,6 +21,7 @@ type PreviewResult = {
     variantsConsidered: number;
     recordsPrepared: number;
     excluded: number;
+    validationIssues: number;
     previewLimit: number;
   };
   exclusions: Record<string, number>;
@@ -373,6 +374,23 @@ export function PreviewPanel(props: {
             </div>
             <div className="rounded-2xl border border-line bg-white/65 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+                Validation Issues
+              </p>
+              <p
+                className={
+                  result.stats.validationIssues > 0
+                    ? "mt-3 text-2xl font-semibold tracking-[-0.04em] text-accent-strong"
+                    : "mt-3 text-2xl font-semibold tracking-[-0.04em]"
+                }
+              >
+                {result.stats.validationIssues.toLocaleString()}
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                Rows blocked because required Google fields were missing or invalid.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white/65 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
                 Query
               </p>
               <p className="mt-3 break-words text-sm leading-7 text-muted">
@@ -380,6 +398,12 @@ export function PreviewPanel(props: {
               </p>
             </div>
           </div>
+
+          {result.stats.validationIssues > 0 ? (
+            <div className="rounded-[1.4rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-4 text-sm leading-7 text-[#7d3d10]">
+              Validation blocked {result.stats.validationIssues.toLocaleString()} row(s) from the feed because required Google fields were missing or invalid. Open the stored run sample after a saved run to see the affected products.
+            </div>
+          ) : null}
 
           {Object.keys(result.exclusions).length ? (
             <div className="rounded-2xl border border-line bg-white/65 p-4">

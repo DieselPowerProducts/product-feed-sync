@@ -21,7 +21,8 @@ const SHOPIFY_PAGE_SIZE = 250;
 const CRON_HOUR_UTC = 9;
 const CRON_MINUTE_UTC = 0;
 export const DEFAULT_PREVIEW_LIMIT = 5;
-const RUN_ARTIFACT_SAMPLE_LIMIT = 50;
+const RUN_ARTIFACT_INCLUDED_SAMPLE_LIMIT = 50;
+const RUN_ARTIFACT_EXCLUDED_SAMPLE_LIMIT = 250;
 const DETAIL_BATCH_SIZE = 150;
 const DETAIL_VARIANT_PAGE_SIZE = SHOPIFY_PAGE_SIZE;
 const DETAIL_MEDIA_LIMIT = SHOPIFY_PAGE_SIZE;
@@ -414,6 +415,7 @@ export interface FeedPreviewRecord {
 
 export interface ExcludedPreviewSample {
   reason: string;
+  details?: string[];
   productId: string;
   variantId: string | null;
   offerId: string | null;
@@ -421,6 +423,7 @@ export interface ExcludedPreviewSample {
   title: string;
   variantTitle: string | null;
   sku: string | null;
+  link?: string | null;
 }
 
 export interface SyncRunArtifact {
@@ -438,6 +441,7 @@ export interface SyncRunArtifact {
   notes: string[];
   stats: SyncRunResult["stats"];
   includedSample: FeedPreviewRecord[];
+  validationSample: ExcludedPreviewSample[];
   excludedSample: ExcludedPreviewSample[];
 }
 
@@ -464,6 +468,7 @@ export interface SyncRunResult {
     variantsConsidered: number;
     recordsPrepared: number;
     excluded: number;
+    validationIssues: number;
     previewLimit: number;
   };
   exclusions: Record<string, number>;
@@ -688,8 +693,9 @@ function incrementCounter(counter: Record<string, number>, key: string) {
 function collectExcludedSample(
   samples: ExcludedPreviewSample[],
   sample: ExcludedPreviewSample,
+  limit = RUN_ARTIFACT_EXCLUDED_SAMPLE_LIMIT,
 ) {
-  if (samples.length >= RUN_ARTIFACT_SAMPLE_LIMIT) {
+  if (samples.length >= limit) {
     return;
   }
 
@@ -1083,6 +1089,115 @@ function normalizeGtin(value: string | null | undefined) {
   return VALID_GTIN_LENGTHS.has(digitsOnly.length) ? digitsOnly : null;
 }
 
+type FeedValidationIssue = {
+  reason: string;
+  detail: string;
+};
+
+function isValidationExclusionReason(reason: string) {
+  return reason.startsWith("validation_");
+}
+
+function countValidationIssues(exclusions: Record<string, number>) {
+  return Object.entries(exclusions).reduce((total, [reason, count]) => {
+    return total + (isValidationExclusionReason(reason) ? count : 0);
+  }, 0);
+}
+
+function validateFeedRecord(params: {
+  record: FeedPreviewRecord;
+  apparelProduct: boolean;
+}) {
+  const issues: FeedValidationIssue[] = [];
+  const { record, apparelProduct } = params;
+  const { productAttributes } = record;
+  const priceAmount = Number(productAttributes.price.amountMicros) / 1_000_000;
+
+  if (!normalizeText(record.offerId)) {
+    issues.push({
+      reason: "validation_missing_required_id",
+      detail: "Missing required Google field: id",
+    });
+  }
+
+  if (!normalizeText(productAttributes.title)) {
+    issues.push({
+      reason: "validation_missing_required_title",
+      detail: "Missing required Google field: title",
+    });
+  }
+
+  if (!normalizeText(productAttributes.description)) {
+    issues.push({
+      reason: "validation_missing_required_description",
+      detail: "Missing required Google field: description",
+    });
+  }
+
+  if (!normalizeText(productAttributes.link)) {
+    issues.push({
+      reason: "validation_missing_required_link",
+      detail: "Missing required Google field: link",
+    });
+  }
+
+  if (!normalizeText(productAttributes.imageLink)) {
+    issues.push({
+      reason: "validation_missing_required_image_link",
+      detail: "Missing required Google field: image_link",
+    });
+  }
+
+  if (!normalizeText(productAttributes.availability)) {
+    issues.push({
+      reason: "validation_missing_required_availability",
+      detail: "Missing required Google field: availability",
+    });
+  }
+
+  if (!productAttributes.price || !Number.isFinite(priceAmount)) {
+    issues.push({
+      reason: "validation_missing_required_price",
+      detail: "Missing required Google field: price",
+    });
+  } else if (priceAmount <= 0) {
+    issues.push({
+      reason: "validation_invalid_non_positive_price",
+      detail: "Google does not allow a price of 0 for standard products.",
+    });
+  }
+
+  if (!normalizeText(productAttributes.brand)) {
+    issues.push({
+      reason: "validation_missing_required_brand",
+      detail: "Missing required Google field: brand",
+    });
+  }
+
+  if (!normalizeText(productAttributes.condition)) {
+    issues.push({
+      reason: "validation_missing_required_condition",
+      detail: "Missing required Google field: condition",
+    });
+  }
+
+  if (apparelProduct && !normalizeText(productAttributes.color)) {
+    issues.push({
+      reason: "validation_missing_required_apparel_color",
+      detail: "Missing required Google field for apparel: color",
+    });
+  }
+
+  if (apparelProduct && !normalizeText(productAttributes.size)) {
+    issues.push({
+      reason: "validation_missing_required_apparel_size",
+      detail: "Missing required Google field for apparel: size",
+    });
+  }
+
+  return issues;
+}
+
 function findProductExclusionReason(product: ShopifyProductNode) {
   const normalizedTags = product.tags.map((tag) => tag.trim().toLowerCase());
 
@@ -1143,7 +1258,13 @@ function buildPreviewRecord(params: {
   variant: ShopifyVariantNode;
   storefrontBaseUrl: string | null;
   productMediaUrls: string[];
-}): FeedPreviewRecord | { excluded: string } {
+}):
+  | FeedPreviewRecord
+  | {
+      excluded: string;
+      details?: string[];
+      link?: string | null;
+    } {
   const { product, variant, storefrontBaseUrl, productMediaUrls } = params;
 
   const variantId = resolveLegacyId(variant.legacyResourceId, variant.id);
@@ -1153,7 +1274,11 @@ function buildPreviewRecord(params: {
     null;
 
   if (!primaryImage) {
-    return { excluded: "missing_image" };
+    return {
+      excluded: "validation_missing_required_image_link",
+      details: ["Missing required Google field: image_link"],
+      link: null,
+    };
   }
 
   const priceAmount = parseAmount(variant.price) ?? 0;
@@ -1170,7 +1295,11 @@ function buildPreviewRecord(params: {
   });
 
   if (!link) {
-    return { excluded: "missing_online_store_url" };
+    return {
+      excluded: "validation_missing_required_link",
+      details: ["Missing required Google field: link"],
+      link: null,
+    };
   }
 
   const additionalImageLinks = productMediaUrls
@@ -1245,8 +1374,7 @@ function buildPreviewRecord(params: {
     parseAmount(variant.inventoryItem?.unitCost?.amount ?? null),
     variant.inventoryItem?.unitCost?.currencyCode ?? currencyCode,
   );
-
-  return {
+  const record = {
     offerId: `shopify_ZZ_${productId}_${variantId}`,
     contentLanguage: env.googleContentLanguage || "en",
     feedLabel: env.googleFeedLabel || "US",
@@ -1302,7 +1430,21 @@ function buildPreviewRecord(params: {
       }),
       costOfGoodsSold,
     },
-  };
+  } satisfies FeedPreviewRecord;
+  const validationIssues = validateFeedRecord({
+    record,
+    apparelProduct,
+  });
+
+  if (validationIssues.length) {
+    return {
+      excluded: validationIssues[0]?.reason ?? "validation_unknown",
+      details: validationIssues.map((issue) => issue.detail),
+      link,
+    };
+  }
+
+  return record;
 }
 
 async function fetchAllProductVariants(params: {
@@ -1416,6 +1558,7 @@ async function buildDryRunPreview(params: {
   );
   const preview: FeedPreviewRecord[] = [];
   const allRecords: FeedPreviewRecord[] = [];
+  const validationSamples: ExcludedPreviewSample[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
   const exclusions: Record<string, number> = {};
   let totalProducts: number | null = null;
@@ -1532,10 +1675,24 @@ async function buildDryRunPreview(params: {
           title: product.title,
           variantTitle: null,
           sku: null,
-        });
-        productsEvaluated += 1;
-        continue;
-      }
+          link: product.onlineStoreUrl ?? null,
+          });
+          if (isValidationExclusionReason(exclusionReason)) {
+            collectExcludedSample(validationSamples, {
+              reason: exclusionReason,
+              productId: resolveLegacyId(product.legacyResourceId, product.id),
+              variantId: null,
+              offerId: null,
+              handle: product.handle,
+              title: product.title,
+              variantTitle: null,
+              sku: null,
+              link: product.onlineStoreUrl ?? null,
+            });
+          }
+          productsEvaluated += 1;
+          continue;
+        }
 
       candidateIds.push(product.id);
     }
@@ -1594,6 +1751,7 @@ async function buildDryRunPreview(params: {
             incrementCounter(exclusions, record.excluded);
             collectExcludedSample(excludedSamples, {
               reason: record.excluded,
+              details: record.details,
               productId: productId,
               variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
               offerId: `shopify_ZZ_${productId}_${resolveLegacyId(variant.legacyResourceId, variant.id)}`,
@@ -1601,7 +1759,22 @@ async function buildDryRunPreview(params: {
               title: product.title,
               variantTitle: variant.title,
               sku: variant.sku ?? null,
+              link: record.link ?? null,
             });
+            if (isValidationExclusionReason(record.excluded)) {
+              collectExcludedSample(validationSamples, {
+                reason: record.excluded,
+                details: record.details,
+                productId: productId,
+                variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
+                offerId: `shopify_ZZ_${productId}_${resolveLegacyId(variant.legacyResourceId, variant.id)}`,
+                handle: product.handle,
+                title: product.title,
+                variantTitle: variant.title,
+                sku: variant.sku ?? null,
+                link: record.link ?? null,
+              });
+            }
             continue;
           }
 
@@ -1673,8 +1846,10 @@ async function buildDryRunPreview(params: {
     allRecords,
     preview: preview.slice(0, params.previewLimit),
     includedSamples: preview.slice(0, params.artifactSampleLimit),
+    validationSamples,
     excludedSamples,
     exclusions,
+    validationIssues: countValidationIssues(exclusions),
     pagesScanned,
     scanCompleted,
     totalProducts,
@@ -1689,6 +1864,7 @@ function buildSyncNotes(params: {
   exhaustive: boolean;
   previewLimit: number;
   scanCompleted: boolean;
+  validationIssues: number;
 }) {
   const notes = [
     "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
@@ -1719,6 +1895,12 @@ function buildSyncNotes(params: {
   } else {
     notes.push(
       "Sample preview stops as soon as enough normalized rows have been collected for the requested preview size.",
+    );
+  }
+
+  if (params.validationIssues > 0) {
+    notes.unshift(
+      `Feed validation blocked ${params.validationIssues} row(s) because required Google fields were missing or invalid. Open the run sample for the affected products.`,
     );
   }
 
@@ -1882,7 +2064,9 @@ export async function runSync(
     Math.min(25, options.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
   );
   const artifactSampleLimit =
-    options.persistHistory ?? true ? RUN_ARTIFACT_SAMPLE_LIMIT : previewLimit;
+    options.persistHistory ?? true
+      ? RUN_ARTIFACT_INCLUDED_SAMPLE_LIMIT
+      : previewLimit;
   const configuration = getConfigurationStatus();
   const exportArtifactId = options.prepareExportArtifact
     ? `${mode}-${startedAt.replaceAll(":", "-")}`
@@ -1908,6 +2092,7 @@ export async function runSync(
       exhaustive,
       previewLimit,
       scanCompleted: previewRun.scanCompleted,
+      validationIssues: previewRun.validationIssues,
     });
     if (options.effectiveNow) {
       notes.unshift(
@@ -1938,6 +2123,7 @@ export async function runSync(
         variantsConsidered: previewRun.variantsConsidered,
         recordsPrepared: previewRun.recordsPrepared,
         excluded,
+        validationIssues: previewRun.validationIssues,
         previewLimit,
       },
       exclusions: previewRun.exclusions,
@@ -1979,6 +2165,7 @@ export async function runSync(
         notes: result.notes,
         stats: result.stats,
         includedSample: previewRun.includedSamples,
+        validationSample: previewRun.validationSamples,
         excludedSample: previewRun.excludedSamples,
       };
 
@@ -2023,6 +2210,7 @@ export async function runSync(
         variantsConsidered: 0,
         recordsPrepared: 0,
         excluded: 0,
+        validationIssues: 0,
         previewLimit,
       },
       exclusions: {},
@@ -2047,6 +2235,7 @@ export async function runSync(
         notes: result.notes,
         stats: result.stats,
         includedSample: [],
+        validationSample: [],
         excludedSample: [],
       };
 
@@ -2095,6 +2284,7 @@ export async function runSyncExport(
       exhaustive,
       previewLimit: DEFAULT_PREVIEW_LIMIT,
       scanCompleted: previewRun.scanCompleted,
+      validationIssues: previewRun.validationIssues,
     }),
     query: previewRun.query,
     lookbackStart: previewRun.lookbackStart,
@@ -2107,6 +2297,7 @@ export async function runSyncExport(
       variantsConsidered: previewRun.variantsConsidered,
       recordsPrepared: previewRun.recordsPrepared,
       excluded,
+      validationIssues: previewRun.validationIssues,
       previewLimit: DEFAULT_PREVIEW_LIMIT,
     },
     exclusions: previewRun.exclusions,

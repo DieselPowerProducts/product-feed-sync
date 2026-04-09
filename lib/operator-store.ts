@@ -55,6 +55,7 @@ export interface SyncHistoryEntry {
     variantsConsidered: number;
     recordsPrepared: number;
     excluded: number;
+    validationIssues?: number;
     previewLimit: number;
   };
 }
@@ -168,6 +169,10 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
           artifactId: entry.artifactId ?? null,
           exportArtifactId: entry.exportArtifactId ?? null,
           notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
+          stats: {
+            ...entry.stats,
+            validationIssues: entry.stats?.validationIssues ?? 0,
+          },
         }))
       : [],
     scheduledTestExport: sanitizeScheduledTestExport(input?.scheduledTestExport),

@@ -172,6 +172,7 @@ function buildSummaryRows(params: {
     productsFetched: number;
     recordsPrepared: number;
     excluded: number;
+    validationIssues: number;
     pagesScanned: number;
     totalProducts: number | null;
   };
@@ -187,6 +188,7 @@ function buildSummaryRows(params: {
     { field: "products_fetched", value: params.stats.productsFetched },
     { field: "records_prepared", value: params.stats.recordsPrepared },
     { field: "excluded", value: params.stats.excluded },
+    { field: "validation_issues", value: params.stats.validationIssues },
     { field: "pages_scanned", value: params.stats.pagesScanned },
     { field: "total_products", value: params.stats.totalProducts ?? "" },
     ...params.notes.map((note, index) => ({
