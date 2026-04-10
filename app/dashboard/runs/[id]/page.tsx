@@ -141,6 +141,28 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
               <p key={note}>{note}</p>
             ))}
           </div>
+          {artifact.exportArtifactId ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&kind=validation&format=csv`}
+                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+              >
+                Download Validation CSV
+              </a>
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&kind=excluded&format=csv`}
+                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+              >
+                Download Excluded CSV
+              </a>
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&kind=excluded&format=xlsx`}
+                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+              >
+                Download Excluded XLSX
+              </a>
+            </div>
+          ) : null}
         </div>
       </section>
 

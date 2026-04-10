@@ -438,6 +438,7 @@ export interface SyncRunArtifact {
   scope: string;
   query: string;
   lookbackStart: string | null;
+  exportArtifactId?: string | null;
   notes: string[];
   stats: SyncRunResult["stats"];
   includedSample: FeedPreviewRecord[];
@@ -489,6 +490,8 @@ export interface SyncExportResult {
   stats: SyncRunResult["stats"];
   exclusions: Record<string, number>;
   rows: FeedPreviewRecord[];
+  excludedRows?: ExcludedPreviewSample[];
+  validationRows?: ExcludedPreviewSample[];
 }
 
 export interface SyncProgressUpdate {
@@ -1021,7 +1024,7 @@ function normalizeCustomLabel2(value: string | null) {
     return null;
   }
 
-  if (normalized === "a" || normalized === "aboveaverage") {
+  if (normalized === "a" || normalized === "above average") {
     return "a";
   }
 
@@ -1029,7 +1032,7 @@ function normalizeCustomLabel2(value: string | null) {
     return "b";
   }
 
-  if (normalized === "c" || normalized === "belowaverage") {
+  if (normalized === "c" || normalized === "below average") {
     return "c";
   }
 
@@ -1064,15 +1067,14 @@ function isApparelProductType(...values: Array<string | null | undefined>) {
 function buildShippingLabel(params: {
   stateRestrictions: string | null;
   quickShip: string | null;
-  priceAmount: number;
 }) {
-  const { stateRestrictions, quickShip, priceAmount } = params;
+  const { stateRestrictions, quickShip } = params;
 
   if (stateRestrictions) {
     return stateRestrictions;
   }
 
-  if (normalizeBooleanish(quickShip) && priceAmount > 199) {
+  if (normalizeBooleanish(quickShip)) {
     return "fast_free";
   }
 
@@ -1426,7 +1428,6 @@ function buildPreviewRecord(params: {
       shippingLabel: buildShippingLabel({
         stateRestrictions,
         quickShip,
-        priceAmount,
       }),
       costOfGoodsSold,
     },
@@ -1558,6 +1559,8 @@ async function buildDryRunPreview(params: {
   );
   const preview: FeedPreviewRecord[] = [];
   const allRecords: FeedPreviewRecord[] = [];
+  const allExcludedRows: ExcludedPreviewSample[] = [];
+  const allValidationRows: ExcludedPreviewSample[] = [];
   const validationSamples: ExcludedPreviewSample[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
   const exclusions: Record<string, number> = {};
@@ -1665,8 +1668,7 @@ async function buildDryRunPreview(params: {
       const exclusionReason = findProductExclusionReason(product);
 
       if (exclusionReason) {
-        incrementCounter(exclusions, exclusionReason);
-        collectExcludedSample(excludedSamples, {
+        const excludedRow = {
           reason: exclusionReason,
           productId: resolveLegacyId(product.legacyResourceId, product.id),
           variantId: null,
@@ -1676,23 +1678,21 @@ async function buildDryRunPreview(params: {
           variantTitle: null,
           sku: null,
           link: product.onlineStoreUrl ?? null,
-          });
-          if (isValidationExclusionReason(exclusionReason)) {
-            collectExcludedSample(validationSamples, {
-              reason: exclusionReason,
-              productId: resolveLegacyId(product.legacyResourceId, product.id),
-              variantId: null,
-              offerId: null,
-              handle: product.handle,
-              title: product.title,
-              variantTitle: null,
-              sku: null,
-              link: product.onlineStoreUrl ?? null,
-            });
-          }
-          productsEvaluated += 1;
-          continue;
+        } satisfies ExcludedPreviewSample;
+        incrementCounter(exclusions, exclusionReason);
+        collectExcludedSample(excludedSamples, excludedRow);
+        if (params.collectAllRecords) {
+          allExcludedRows.push(excludedRow);
         }
+        if (isValidationExclusionReason(exclusionReason)) {
+          collectExcludedSample(validationSamples, excludedRow);
+          if (params.collectAllRecords) {
+            allValidationRows.push(excludedRow);
+          }
+        }
+        productsEvaluated += 1;
+        continue;
+      }
 
       candidateIds.push(product.id);
     }
@@ -1748,8 +1748,7 @@ async function buildDryRunPreview(params: {
           });
 
           if ("excluded" in record) {
-            incrementCounter(exclusions, record.excluded);
-            collectExcludedSample(excludedSamples, {
+            const excludedRow = {
               reason: record.excluded,
               details: record.details,
               productId: productId,
@@ -1760,20 +1759,17 @@ async function buildDryRunPreview(params: {
               variantTitle: variant.title,
               sku: variant.sku ?? null,
               link: record.link ?? null,
-            });
+            } satisfies ExcludedPreviewSample;
+            incrementCounter(exclusions, record.excluded);
+            collectExcludedSample(excludedSamples, excludedRow);
+            if (params.collectAllRecords) {
+              allExcludedRows.push(excludedRow);
+            }
             if (isValidationExclusionReason(record.excluded)) {
-              collectExcludedSample(validationSamples, {
-                reason: record.excluded,
-                details: record.details,
-                productId: productId,
-                variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
-                offerId: `shopify_ZZ_${productId}_${resolveLegacyId(variant.legacyResourceId, variant.id)}`,
-                handle: product.handle,
-                title: product.title,
-                variantTitle: variant.title,
-                sku: variant.sku ?? null,
-                link: record.link ?? null,
-              });
+              collectExcludedSample(validationSamples, excludedRow);
+              if (params.collectAllRecords) {
+                allValidationRows.push(excludedRow);
+              }
             }
             continue;
           }
@@ -1844,6 +1840,8 @@ async function buildDryRunPreview(params: {
     lookbackStart: search.lookbackStart,
     storefrontBaseUrl,
     allRecords,
+    allExcludedRows,
+    allValidationRows,
     preview: preview.slice(0, params.previewLimit),
     includedSamples: preview.slice(0, params.artifactSampleLimit),
     validationSamples,
@@ -2145,6 +2143,8 @@ export async function runSync(
         stats: result.stats,
         exclusions: previewRun.exclusions,
         rows: previewRun.allRecords,
+        excludedRows: previewRun.allExcludedRows,
+        validationRows: previewRun.allValidationRows,
       } satisfies SyncExportResult);
     }
 
@@ -2162,6 +2162,7 @@ export async function runSync(
         scope: result.scope,
         query: result.query,
         lookbackStart: result.lookbackStart,
+        exportArtifactId: result.exportArtifactId ?? null,
         notes: result.notes,
         stats: result.stats,
         includedSample: previewRun.includedSamples,
@@ -2232,6 +2233,7 @@ export async function runSync(
         scope: result.scope,
         query: result.query,
         lookbackStart: result.lookbackStart,
+        exportArtifactId: result.exportArtifactId ?? null,
         notes: result.notes,
         stats: result.stats,
         includedSample: [],
@@ -2302,5 +2304,7 @@ export async function runSyncExport(
     },
     exclusions: previewRun.exclusions,
     rows: previewRun.allRecords,
+    excludedRows: previewRun.allExcludedRows,
+    validationRows: previewRun.allValidationRows,
   };
 }

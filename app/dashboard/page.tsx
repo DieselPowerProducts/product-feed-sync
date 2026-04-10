@@ -463,6 +463,18 @@ export default async function DashboardPage(props: DashboardPageProps) {
                                 >
                                   Download XLSX
                                 </a>
+                                <a
+                                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&kind=validation&format=csv`}
+                                  className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                                >
+                                  Validation CSV
+                                </a>
+                                <a
+                                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&kind=excluded&format=csv`}
+                                  className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                                >
+                                  Excluded CSV
+                                </a>
                               </>
                             ) : null}
                             <form action={deleteHistoryEntryAction}>

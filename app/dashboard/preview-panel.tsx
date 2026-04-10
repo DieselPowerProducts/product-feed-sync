@@ -317,6 +317,18 @@ export function PreviewPanel(props: {
                 >
                   Download Audit XLSX
                 </a>
+                <a
+                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}&kind=validation&format=csv`}
+                  className="inline-flex items-center justify-center rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-accent-strong transition-colors hover:bg-white"
+                >
+                  Download Validation CSV
+                </a>
+                <a
+                  href={`/api/dashboard/export/preview?id=${encodeURIComponent(result.exportArtifactId)}&kind=excluded&format=csv`}
+                  className="inline-flex items-center justify-center rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-accent-strong transition-colors hover:bg-white"
+                >
+                  Download Excluded CSV
+                </a>
               </div>
             </div>
           ) : null}

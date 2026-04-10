@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
+  buildExcludedExportCsv,
+  buildExcludedExportWorkbook,
   buildPreviewExportCsv,
   buildPreviewExportWorkbook,
 } from "@/lib/feed-export";
@@ -26,12 +28,20 @@ function isSupportedFormat(value: string | null): value is "csv" | "xlsx" {
   return value === "csv" || value === "xlsx";
 }
 
+function isSupportedKind(
+  value: string | null,
+): value is "feed" | "excluded" | "validation" {
+  return value === "feed" || value === "excluded" || value === "validation";
+}
+
 function buildFilename(
   mode: Exclude<SyncMode, "idle">,
   startedAt: string,
+  kind: "feed" | "excluded" | "validation",
   format: "csv" | "xlsx",
 ) {
-  return `dpp-feed-${mode}-export-${startedAt.replaceAll(":", "-")}.${format}`;
+  const suffix = kind === "feed" ? "export" : kind;
+  return `dpp-feed-${mode}-${suffix}-${startedAt.replaceAll(":", "-")}.${format}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -54,6 +64,8 @@ export async function GET(request: NextRequest) {
   const mode = request.nextUrl.searchParams.get("mode");
   const requestedFormat = request.nextUrl.searchParams.get("format");
   const format = isSupportedFormat(requestedFormat) ? requestedFormat : "xlsx";
+  const requestedKind = request.nextUrl.searchParams.get("kind");
+  const kind = isSupportedKind(requestedKind) ? requestedKind : "feed";
 
   if (exportId) {
     const artifact = await readPreviewExportArtifact<SyncExportResult>(exportId);
@@ -69,9 +81,25 @@ export async function GET(request: NextRequest) {
     }
 
     const payload =
-      format === "csv"
-        ? buildPreviewExportCsv(artifact)
-        : buildPreviewExportWorkbook(artifact);
+      kind === "feed"
+        ? format === "csv"
+          ? buildPreviewExportCsv(artifact)
+          : buildPreviewExportWorkbook(artifact)
+        : kind === "excluded"
+          ? format === "csv"
+            ? buildExcludedExportCsv(artifact.excludedRows)
+            : buildExcludedExportWorkbook({
+                result: artifact,
+                rows: artifact.excludedRows,
+                source: "excluded_rows",
+              })
+          : format === "csv"
+            ? buildExcludedExportCsv(artifact.validationRows)
+            : buildExcludedExportWorkbook({
+                result: artifact,
+                rows: artifact.validationRows,
+                source: "validation_rows",
+              });
 
     return new NextResponse(payload, {
       status: 200,
@@ -83,6 +111,7 @@ export async function GET(request: NextRequest) {
         "Content-Disposition": `attachment; filename="${buildFilename(
           artifact.mode,
           artifact.startedAt,
+          kind,
           format,
         )}"`,
         "Cache-Control": "no-store",

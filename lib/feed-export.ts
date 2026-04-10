@@ -1,5 +1,9 @@
 import * as XLSX from "xlsx";
-import type { FeedPreviewRecord, SyncExportResult } from "@/lib/sync";
+import type {
+  ExcludedPreviewSample,
+  FeedPreviewRecord,
+  SyncExportResult,
+} from "@/lib/sync";
 
 type FeedExportRow = {
   id: string;
@@ -36,6 +40,19 @@ type FeedExportRow = {
   size_system: string;
 };
 
+type ExcludedExportRow = {
+  reason: string;
+  details: string;
+  title: string;
+  handle: string;
+  product_id: string;
+  variant_id: string;
+  offer_id: string;
+  sku: string;
+  variant_title: string;
+  link: string;
+};
+
 const FEED_EXPORT_HEADERS: Array<keyof FeedExportRow> = [
   "id",
   "title",
@@ -69,6 +86,19 @@ const FEED_EXPORT_HEADERS: Array<keyof FeedExportRow> = [
   "gender",
   "size",
   "size_system",
+];
+
+const EXCLUDED_EXPORT_HEADERS: Array<keyof ExcludedExportRow> = [
+  "reason",
+  "details",
+  "title",
+  "handle",
+  "product_id",
+  "variant_id",
+  "offer_id",
+  "sku",
+  "variant_title",
+  "link",
 ];
 
 function formatPriceValue(value: FeedPreviewRecord["productAttributes"]["price"] | null) {
@@ -209,6 +239,25 @@ function buildFeedExportRows(result: SyncExportResult) {
   return result.rows.map(toFeedExportRow);
 }
 
+function toExcludedExportRow(row: ExcludedPreviewSample): ExcludedExportRow {
+  return {
+    reason: row.reason,
+    details: row.details?.join(" | ") ?? "",
+    title: row.title,
+    handle: row.handle,
+    product_id: row.productId,
+    variant_id: row.variantId ?? "",
+    offer_id: row.offerId ?? "",
+    sku: row.sku ?? "",
+    variant_title: row.variantTitle ?? "",
+    link: row.link ?? "",
+  };
+}
+
+function buildExcludedExportRows(rows: ExcludedPreviewSample[] | undefined) {
+  return (rows ?? []).map(toExcludedExportRow);
+}
+
 export function buildPreviewExportCsv(result: SyncExportResult) {
   const worksheet = XLSX.utils.json_to_sheet(buildFeedExportRows(result), {
     header: FEED_EXPORT_HEADERS,
@@ -244,6 +293,51 @@ export function buildPreviewExportWorkbook(result: SyncExportResult) {
     }),
   );
   appendSheet(workbook, "exclusions", buildExclusionRows(result.exclusions));
+
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+}
+
+export function buildExcludedExportCsv(
+  rows: ExcludedPreviewSample[] | undefined,
+) {
+  const worksheet = XLSX.utils.json_to_sheet(buildExcludedExportRows(rows), {
+    header: EXCLUDED_EXPORT_HEADERS,
+  });
+
+  return `\uFEFF${XLSX.utils.sheet_to_csv(worksheet, {
+    FS: ",",
+    RS: "\r\n",
+  })}`;
+}
+
+export function buildExcludedExportWorkbook(params: {
+  result: SyncExportResult;
+  rows: ExcludedPreviewSample[] | undefined;
+  source: "excluded_rows" | "validation_rows";
+}) {
+  const workbook = XLSX.utils.book_new();
+
+  appendSheet(
+    workbook,
+    params.source,
+    buildExcludedExportRows(params.rows),
+    EXCLUDED_EXPORT_HEADERS,
+  );
+  appendSheet(
+    workbook,
+    "summary",
+    buildSummaryRows({
+      source: params.source,
+      mode: params.result.mode,
+      startedAt: params.result.startedAt,
+      finishedAt: params.result.finishedAt,
+      query: params.result.query,
+      lookbackStart: params.result.lookbackStart,
+      stats: params.result.stats,
+      notes: params.result.notes,
+    }),
+  );
+  appendSheet(workbook, "exclusions", buildExclusionRows(params.result.exclusions));
 
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
