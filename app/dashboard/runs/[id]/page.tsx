@@ -19,6 +19,25 @@ function formatTimestamp(value: string) {
   }).format(new Date(value));
 }
 
+function describeRunSource(artifact: {
+  trigger: "cron" | "manual";
+  purpose: "sync" | "test-save" | null;
+}) {
+  if (artifact.trigger === "cron" && artifact.purpose === "sync") {
+    return "scheduled real sync";
+  }
+
+  if (artifact.trigger === "cron" && artifact.purpose === "test-save") {
+    return "scheduled test save";
+  }
+
+  if (artifact.trigger === "manual" && artifact.purpose === "test-save") {
+    return "manual test save";
+  }
+
+  return artifact.trigger === "cron" ? "scheduled" : "manual";
+}
+
 export const dynamic = "force-dynamic";
 
 export default async function RunSamplePage(props: RunSamplePageProps) {
@@ -42,7 +61,7 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
               Run Sample
             </p>
             <h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em] text-foreground md:text-5xl">
-              {artifact.mode} {artifact.trigger} run
+              {artifact.mode} {describeRunSource(artifact)} run
             </h1>
             <p className="mt-3 max-w-3xl text-base leading-8 text-muted">
               Stored QA sample for this run. Included rows are exact Merchant API
@@ -143,6 +162,18 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
           </div>
           {artifact.exportArtifactId ? (
             <div className="mt-4 flex flex-wrap gap-2">
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&format=csv`}
+                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+              >
+                Download Feed CSV
+              </a>
+              <a
+                href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&format=xlsx`}
+                className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+              >
+                Download Feed XLSX
+              </a>
               <a
                 href={`/api/dashboard/export/preview?id=${encodeURIComponent(artifact.exportArtifactId)}&kind=validation&format=csv`}
                 className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"

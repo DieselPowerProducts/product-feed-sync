@@ -22,6 +22,9 @@ const LOCAL_PREVIEW_EXPORT_DIR = path.join(
   "preview-exports",
 );
 const HISTORY_LIMIT = 50;
+const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE = 2;
+
+export type SyncHistoryPurpose = "sync" | "test-save";
 
 export interface SyncSettings {
   anchorDate: string;
@@ -37,6 +40,7 @@ export interface SyncHistoryEntry {
   startedAt: string;
   finishedAt: string;
   trigger: "cron" | "manual";
+  purpose: SyncHistoryPurpose | null;
   mode: "delta" | "full";
   dryRun: boolean;
   ok: boolean;
@@ -166,6 +170,10 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
     history: Array.isArray(input?.history)
       ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
           ...entry,
+          purpose:
+            entry.purpose === "sync" || entry.purpose === "test-save"
+              ? entry.purpose
+              : null,
           artifactId: entry.artifactId ?? null,
           exportArtifactId: entry.exportArtifactId ?? null,
           notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
@@ -398,13 +406,21 @@ export async function getSyncHistory(limit = 20) {
 export async function appendSyncHistory(entry: SyncHistoryEntry) {
   const state = await readState();
   const combinedHistory = [entry, ...state.history];
-  const retainedHistory = combinedHistory.slice(0, HISTORY_LIMIT);
+  const cappedHistory = combinedHistory.slice(0, HISTORY_LIMIT);
+  const {
+    history: retainedHistory,
+    prunedScheduledSyncExports,
+  } = retainScheduledSyncExports(cappedHistory);
   const evictedHistory = combinedHistory.slice(HISTORY_LIMIT);
 
   await writeState({
     ...state,
     history: retainedHistory,
   });
+
+  if (prunedScheduledSyncExports.length) {
+    await deleteScheduledSyncExportArtifacts(prunedScheduledSyncExports);
+  }
 
   if (evictedHistory.length) {
     await deleteHistoryArtifacts(evictedHistory);
@@ -591,6 +607,69 @@ async function deleteHistoryArtifacts(entries: SyncHistoryEntry[]) {
 
     if (entry.exportArtifactId) {
       await deletePreviewExportArtifactById(entry.exportArtifactId);
+    }
+  }
+}
+
+function retainScheduledSyncExports(history: SyncHistoryEntry[]) {
+  const retainedByMode: Record<SyncHistoryEntry["mode"], number> = {
+    delta: 0,
+    full: 0,
+  };
+  const prunedScheduledSyncExports: SyncHistoryEntry[] = [];
+
+  const retainedHistory = history.map((entry) => {
+    if (
+      entry.trigger !== "cron" ||
+      entry.purpose !== "sync" ||
+      !entry.exportArtifactId
+    ) {
+      return entry;
+    }
+
+    if (retainedByMode[entry.mode] < RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE) {
+      retainedByMode[entry.mode] += 1;
+      return entry;
+    }
+
+    prunedScheduledSyncExports.push(entry);
+    return {
+      ...entry,
+      exportArtifactId: null,
+    };
+  });
+
+  return {
+    history: retainedHistory,
+    prunedScheduledSyncExports,
+  };
+}
+
+async function clearRunArtifactExportReference(id: string) {
+  const artifact = await readRunArtifact<Record<string, unknown>>(id);
+
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+    return;
+  }
+
+  if (!("exportArtifactId" in artifact) || !artifact.exportArtifactId) {
+    return;
+  }
+
+  await writeRunArtifact(id, {
+    ...artifact,
+    exportArtifactId: null,
+  });
+}
+
+async function deleteScheduledSyncExportArtifacts(entries: SyncHistoryEntry[]) {
+  for (const entry of entries) {
+    if (entry.exportArtifactId) {
+      await deletePreviewExportArtifactById(entry.exportArtifactId);
+    }
+
+    if (entry.artifactId) {
+      await clearRunArtifactExportReference(entry.artifactId);
     }
   }
 }

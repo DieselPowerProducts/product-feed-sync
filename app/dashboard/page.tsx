@@ -75,6 +75,25 @@ function prettifyStorageMode(mode: "blob" | "local" | "memory") {
   return "In-memory";
 }
 
+function describeRunSource(entry: {
+  trigger: "cron" | "manual";
+  purpose: "sync" | "test-save" | null;
+}) {
+  if (entry.trigger === "cron" && entry.purpose === "sync") {
+    return "scheduled real sync";
+  }
+
+  if (entry.trigger === "cron" && entry.purpose === "test-save") {
+    return "scheduled test save";
+  }
+
+  if (entry.trigger === "manual" && entry.purpose === "test-save") {
+    return "manual test save";
+  }
+
+  return entry.trigger === "cron" ? "scheduled" : "manual";
+}
+
 function getSavedMessage(saved: string | undefined) {
   switch (saved) {
     case "settings":
@@ -146,9 +165,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const upcoming = getUpcomingSyncDates(now, settings);
   const saved = getSearchParam(searchParams, "saved");
   const flashMessage = getSavedMessage(saved);
-  const downloadableTestExports = history.filter(
-    (entry) => entry.exportArtifactId,
-  );
+  const downloadableExports = history.filter((entry) => entry.exportArtifactId);
   const requestedTestAt = getSearchParam(searchParams, "testAt");
   const defaultTestSaveDateTime = requestedTestAt
     ? formatPacificDateTimeInputValue(requestedTestAt)
@@ -651,12 +668,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </h3>
             </div>
             <p className="text-sm text-muted">
-              These are persisted one-time test saves from the dashboard or the
-              morning scheduler.
+              Manual test saves stay available until deleted. Real scheduled
+              sync downloads are kept only for the newest two <code>delta</code>{" "}
+              and two <code>full</code> runs, and older scheduled runs stay in
+              history without download buttons.
             </p>
           </div>
 
-          {downloadableTestExports.length ? (
+          {downloadableExports.length ? (
             <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
               <div className="overflow-x-auto">
                 <table className="min-w-full text-left text-sm">
@@ -670,7 +689,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {downloadableTestExports.map((entry) => (
+                    {downloadableExports.map((entry) => (
                       <tr
                         key={`${entry.id}-export`}
                         className="border-b border-line/70 align-top last:border-b-0"
@@ -699,7 +718,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           <p className="mt-2">Excluded: {entry.stats.excluded}</p>
                         </td>
                         <td className="px-4 py-4 text-muted">
-                          <p>{entry.trigger === "cron" ? "scheduled" : "manual"}</p>
+                          <p>{describeRunSource(entry)}</p>
                           <p className="mt-2">{entry.scope}</p>
                         </td>
                         <td className="px-4 py-4">

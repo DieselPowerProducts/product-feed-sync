@@ -32,8 +32,10 @@ export async function GET(request: NextRequest) {
 
   const result = await runSync(decision.mode, {
     trigger: "cron",
+    purpose: "sync",
     dryRun: settings.defaultDryRun,
     settings,
+    prepareExportArtifact: true,
   });
 
   return NextResponse.json(

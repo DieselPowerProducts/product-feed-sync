@@ -5,6 +5,7 @@ import {
   getSyncSettings,
   writePreviewExportArtifact,
   writeRunArtifact,
+  type SyncHistoryPurpose,
   type SyncHistoryEntry,
   type SyncSettings,
 } from "@/lib/operator-store";
@@ -431,6 +432,7 @@ export interface SyncRunArtifact {
   startedAt: string;
   finishedAt: string;
   trigger: "cron" | "manual";
+  purpose: SyncHistoryPurpose | null;
   mode: Exclude<SyncMode, "idle">;
   dryRun: boolean;
   exhaustive: boolean;
@@ -449,6 +451,7 @@ export interface SyncRunArtifact {
 export interface SyncRunResult {
   ok: boolean;
   trigger: "cron" | "manual";
+  purpose: SyncHistoryPurpose;
   mode: Exclude<SyncMode, "idle">;
   dryRun: boolean;
   exhaustive: boolean;
@@ -2026,6 +2029,7 @@ function toHistoryEntry(
     startedAt: result.startedAt,
     finishedAt: result.finishedAt,
     trigger: result.trigger,
+    purpose: result.purpose,
     mode: result.mode,
     dryRun: result.dryRun,
     ok: result.ok,
@@ -2043,6 +2047,7 @@ export async function runSync(
   mode: Exclude<SyncMode, "idle">,
   options: {
     trigger: "cron" | "manual";
+    purpose?: SyncHistoryPurpose;
     dryRun?: boolean;
     previewLimit?: number;
     persistHistory?: boolean;
@@ -2055,6 +2060,7 @@ export async function runSync(
 ): Promise<SyncRunResult> {
   const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
+  const purpose = options.purpose ?? "sync";
   const dryRun = options.dryRun ?? settings.defaultDryRun;
   const exhaustive = options.exhaustive ?? (options.trigger === "cron" || mode === "full");
   const previewLimit = Math.max(
@@ -2101,6 +2107,7 @@ export async function runSync(
     const result = {
       ok: true,
       trigger: options.trigger,
+      purpose,
       mode,
       dryRun,
       exhaustive,
@@ -2155,6 +2162,7 @@ export async function runSync(
         startedAt: result.startedAt,
         finishedAt: result.finishedAt,
         trigger: result.trigger,
+        purpose: result.purpose,
         mode: result.mode,
         dryRun: result.dryRun,
         exhaustive: result.exhaustive,
@@ -2183,6 +2191,7 @@ export async function runSync(
     const result = {
       ok: false,
       trigger: options.trigger,
+      purpose,
       mode,
       dryRun,
       exhaustive,
@@ -2226,6 +2235,7 @@ export async function runSync(
         startedAt: result.startedAt,
         finishedAt: result.finishedAt,
         trigger: result.trigger,
+        purpose: result.purpose,
         mode: result.mode,
         dryRun: result.dryRun,
         exhaustive: result.exhaustive,

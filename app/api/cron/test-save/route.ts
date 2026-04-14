@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
   const settings = await getSyncSettings();
   const result = await runSync(scheduledTestExport.mode, {
     trigger: "cron",
+    purpose: "test-save",
     dryRun: settings.defaultDryRun,
     settings,
     prepareExportArtifact: true,

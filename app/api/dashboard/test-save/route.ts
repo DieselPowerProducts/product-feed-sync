@@ -84,6 +84,7 @@ export async function POST(request: NextRequest) {
   const settings = await getSyncSettings();
   const result = await runSync(mode, {
     trigger: "manual",
+    purpose: "test-save",
     dryRun: settings.defaultDryRun,
     settings,
     prepareExportArtifact: true,
