@@ -86,10 +86,16 @@ const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
         colorFeed: metafield(namespace: "feed", key: "color") {
           value
         }
+        shopifyColorPattern: metafield(namespace: "shopify", key: "color-pattern") {
+          value
+        }
         sizeCustom: metafield(namespace: "custom", key: "size") {
           value
         }
         sizeFeed: metafield(namespace: "feed", key: "size") {
+          value
+        }
+        shopifySize: metafield(namespace: "shopify", key: "size") {
           value
         }
         applicationFeed: metafield(namespace: "feed", key: "application") {
@@ -149,10 +155,16 @@ const EXPLICIT_VARIANT_FEED_METAFIELDS = `
               colorFeed: metafield(namespace: "feed", key: "color") {
                 value
               }
+              shopifyColorPattern: metafield(namespace: "shopify", key: "color-pattern") {
+                value
+              }
               sizeCustom: metafield(namespace: "custom", key: "size") {
                 value
               }
               sizeFeed: metafield(namespace: "feed", key: "size") {
+                value
+              }
+              shopifySize: metafield(namespace: "shopify", key: "size") {
                 value
               }
               applicationFeed: metafield(namespace: "feed", key: "application") {
@@ -558,8 +570,10 @@ interface ShopifyExplicitFeedMetafields {
   quickShipFeed?: ShopifySingleMetafieldValue | null;
   colorCustom?: ShopifySingleMetafieldValue | null;
   colorFeed?: ShopifySingleMetafieldValue | null;
+  shopifyColorPattern?: ShopifySingleMetafieldValue | null;
   sizeCustom?: ShopifySingleMetafieldValue | null;
   sizeFeed?: ShopifySingleMetafieldValue | null;
+  shopifySize?: ShopifySingleMetafieldValue | null;
   application?: ShopifySingleMetafieldValue | null;
   applicationFeed?: ShopifySingleMetafieldValue | null;
 }
@@ -1063,6 +1077,117 @@ function readSelectedOptionValue(
   return null;
 }
 
+function collectSerializedMetafieldValues(
+  input: unknown,
+  accumulator: string[],
+) {
+  if (input === null || input === undefined) {
+    return;
+  }
+
+  if (
+    typeof input === "string" ||
+    typeof input === "number" ||
+    typeof input === "boolean"
+  ) {
+    const value = normalizeText(String(input));
+
+    if (value) {
+      accumulator.push(value);
+    }
+
+    return;
+  }
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectSerializedMetafieldValues(item, accumulator);
+    }
+
+    return;
+  }
+
+  if (typeof input !== "object") {
+    return;
+  }
+
+  const record = input as Record<string, unknown>;
+  const beforePreferredKeys = accumulator.length;
+
+  for (const key of ["value", "name", "label"]) {
+    if (key in record) {
+      collectSerializedMetafieldValues(record[key], accumulator);
+    }
+  }
+
+  if (accumulator.length > beforePreferredKeys) {
+    return;
+  }
+
+  for (const nestedValue of Object.values(record)) {
+    collectSerializedMetafieldValues(nestedValue, accumulator);
+  }
+}
+
+function parseSerializedMetafieldValues(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+    const collected: string[] = [];
+
+    collectSerializedMetafieldValues(parsed, collected);
+
+    if (collected.length > 0) {
+      return Array.from(new Set(collected));
+    }
+  } catch {
+    // Some Shopify metafields are plain strings instead of serialized JSON.
+  }
+
+  return [normalized];
+}
+
+function formatShopifyColorPatternValue(value: string | null | undefined) {
+  const values = parseSerializedMetafieldValues(value);
+
+  if (values.length === 0) {
+    return null;
+  }
+
+  return values.join("/");
+}
+
+function formatSingleShopifyAttributeValue(value: string | null | undefined) {
+  const values = parseSerializedMetafieldValues(value);
+
+  return values.length === 1 ? values[0] : null;
+}
+
+function resolveVariantTitleSize(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const segments = normalized
+    .split("/")
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean)
+    .filter((segment) => normalizeLookupToken(segment) !== "default title");
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return segments.at(-1) ?? null;
+}
+
 function isApparelProductType(...values: Array<string | null | undefined>) {
   return values.some((value) => normalizeLookupToken(value).includes("apparel"));
 }
@@ -1261,6 +1386,7 @@ function buildSearchQuery(
 function buildPreviewRecord(params: {
   product: ShopifyProductNode;
   variant: ShopifyVariantNode;
+  totalVariants: number;
   storefrontBaseUrl: string | null;
   productMediaUrls: string[];
 }):
@@ -1270,7 +1396,8 @@ function buildPreviewRecord(params: {
       details?: string[];
       link?: string | null;
     } {
-  const { product, variant, storefrontBaseUrl, productMediaUrls } = params;
+  const { product, variant, totalVariants, storefrontBaseUrl, productMediaUrls } =
+    params;
 
   const variantId = resolveLegacyId(variant.legacyResourceId, variant.id);
   const productId = resolveLegacyId(product.legacyResourceId, product.id);
@@ -1356,17 +1483,40 @@ function buildPreviewRecord(params: {
   ]);
   const brand = pickFirstNonEmpty(product.vendor);
   const apparelProduct = isApparelProductType(productType, product.productType);
+  const shopifyColorPattern = formatShopifyColorPatternValue(
+    readExplicitMetafieldValue([product, variant], ["shopifyColorPattern"]),
+  );
+  const explicitColor = readExplicitMetafieldValue(metafieldOwners, [
+    "colorCustom",
+    "colorFeed",
+  ]);
+  const selectedColor = readSelectedOptionValue(variant.selectedOptions, [
+    "color",
+    "colour",
+  ]);
+  const explicitSize = readExplicitMetafieldValue(metafieldOwners, [
+    "sizeCustom",
+    "sizeFeed",
+  ]);
+  const selectedSize = readSelectedOptionValue(variant.selectedOptions, ["size"]);
+  const variantTitleSize = resolveVariantTitleSize(variant.title);
+  const shopifySize =
+    totalVariants === 1
+      ? formatSingleShopifyAttributeValue(
+          readExplicitMetafieldValue([product, variant], ["shopifySize"]),
+        )
+      : null;
   const color = apparelProduct
     ? pickFirstNonEmpty(
-        readSelectedOptionValue(variant.selectedOptions, ["color", "colour"]),
-        readExplicitMetafieldValue(metafieldOwners, ["colorCustom", "colorFeed"]),
+        shopifyColorPattern,
+        selectedColor,
+        explicitColor,
       )
     : null;
   const size = apparelProduct
-    ? pickFirstNonEmpty(
-        readSelectedOptionValue(variant.selectedOptions, ["size"]),
-        readExplicitMetafieldValue(metafieldOwners, ["sizeCustom", "sizeFeed"]),
-      )
+    ? totalVariants > 1
+      ? pickFirstNonEmpty(selectedSize, variantTitleSize, explicitSize)
+      : pickFirstNonEmpty(shopifySize, explicitSize, selectedSize, variantTitleSize)
     : null;
   const productTypeValues = productType ? [productType] : [];
   const gtins = gtin ? [gtin] : [];
@@ -1746,6 +1896,7 @@ async function buildDryRunPreview(params: {
           const record = buildPreviewRecord({
             product,
             variant,
+            totalVariants: variants.length,
             storefrontBaseUrl,
             productMediaUrls,
           });
