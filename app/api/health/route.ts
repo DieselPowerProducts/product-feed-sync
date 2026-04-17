@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConfigurationStatus } from "@/lib/env";
-import {
-  getOperatorStoreStatus,
-  getScheduledTestExport,
-  getSyncSettings,
-} from "@/lib/operator-store";
+import { getGoogleMerchantConnectionStatus } from "@/lib/google-merchant";
+import { getOperatorStoreStatus, getSyncSettings } from "@/lib/operator-store";
 import {
   getRuntimeShopifyConnection,
   getShopifyConfigurationStatus,
@@ -16,9 +13,9 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const now = new Date();
-  const [settings, scheduledTestExport] = await Promise.all([
+  const [settings, googleMerchant] = await Promise.all([
     getSyncSettings(),
-    getScheduledTestExport(),
+    getGoogleMerchantConnectionStatus(),
   ]);
   const shopifyConnection = await getRuntimeShopifyConnection();
 
@@ -29,14 +26,10 @@ export async function GET() {
     cadence: {
       cronSchedulesUtc: {
         sync: ["0 9 * * *"],
-        testSave: ["0 14 * * *", "0 15 * * *"],
       },
       anchorDate: settings.anchorDate,
       deltaIntervalDays: settings.deltaIntervalDays,
       fullIntervalDays: settings.fullIntervalDays,
-      lookbackDays: settings.lookbackDays,
-      defaultDryRun: settings.defaultDryRun,
-      scheduledTestExport,
     },
     configuration: getConfigurationStatus(),
     storage: getOperatorStoreStatus(),
@@ -45,6 +38,7 @@ export async function GET() {
         ...getShopifyConfigurationStatus(),
         connection: shopifyConnection,
       },
+      googleMerchant,
     },
     nextDecision: decideSyncMode(now, settings),
   });

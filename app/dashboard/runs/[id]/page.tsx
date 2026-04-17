@@ -28,7 +28,7 @@ function describeRunSource(artifact: {
   }
 
   if (artifact.trigger === "cron" && artifact.purpose === "test-save") {
-    return "scheduled test save";
+    return "legacy scheduled test save";
   }
 
   if (artifact.trigger === "manual" && artifact.purpose === "test-save") {

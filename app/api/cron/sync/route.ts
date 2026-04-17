@@ -6,6 +6,7 @@ import { decideSyncMode, runSync } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   if (!isAuthorizedCronRequest(request)) {
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       skipped: true,
-      dryRun: settings.defaultDryRun,
+      dryRun: false,
       decision,
     });
   }
@@ -33,7 +34,7 @@ export async function GET(request: NextRequest) {
   const result = await runSync(decision.mode, {
     trigger: "cron",
     purpose: "sync",
-    dryRun: settings.defaultDryRun,
+    dryRun: false,
     settings,
     prepareExportArtifact: true,
   });

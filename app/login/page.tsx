@@ -42,8 +42,8 @@ export default async function LoginPage(props: LoginPageProps) {
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-8 text-muted md:text-lg">
             Shared operator login for feed previews, cadence settings, and sync
-            history. Shopify is already connected. Google writes are still
-            disabled.
+            history. Shopify is already connected. Live Merchant API writes
+            run when dry run is disabled.
           </p>
 
           <div className="mt-8 grid gap-4 md:grid-cols-3">

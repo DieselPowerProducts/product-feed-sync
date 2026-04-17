@@ -30,8 +30,6 @@ export interface SyncSettings {
   anchorDate: string;
   deltaIntervalDays: number;
   fullIntervalDays: number;
-  defaultDryRun: boolean;
-  lookbackDays: number;
   updatedAt: string;
 }
 
@@ -64,16 +62,9 @@ export interface SyncHistoryEntry {
   };
 }
 
-export interface ScheduledTestExport {
-  mode: "delta" | "full";
-  runAt: string;
-  requestedAt: string;
-}
-
 interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
-  scheduledTestExport: ScheduledTestExport | null;
 }
 
 type StorageMode = "blob" | "local" | "memory";
@@ -92,8 +83,6 @@ function defaultSettings(): SyncSettings {
     anchorDate: env.syncAnchorDate,
     deltaIntervalDays: readPositiveInteger(env.deltaIntervalDays, 7),
     fullIntervalDays: readPositiveInteger(env.fullIntervalDays, 15),
-    defaultDryRun: env.defaultDryRun,
-    lookbackDays: readPositiveInteger(env.lookbackDays, 8),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -102,7 +91,6 @@ function defaultState(): OperatorState {
   return {
     settings: defaultSettings(),
     history: [],
-    scheduledTestExport: null,
   };
 }
 
@@ -122,46 +110,8 @@ function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
       Number(input?.fullIntervalDays),
       defaults.fullIntervalDays,
     ),
-    defaultDryRun:
-      typeof input?.defaultDryRun === "boolean"
-        ? input.defaultDryRun
-        : defaults.defaultDryRun,
-    lookbackDays: readPositiveInteger(
-      Number(input?.lookbackDays),
-      defaults.lookbackDays,
-    ),
     updatedAt: input?.updatedAt ?? defaults.updatedAt,
   } satisfies SyncSettings;
-}
-
-function sanitizeScheduledTestExport(
-  input: Partial<ScheduledTestExport> | null | undefined,
-) {
-  if (!input) {
-    return null;
-  }
-
-  const mode = input.mode === "delta" || input.mode === "full" ? input.mode : null;
-  const runAt =
-    typeof input.runAt === "string" &&
-    Number.isFinite(new Date(input.runAt).getTime())
-      ? new Date(input.runAt).toISOString()
-      : null;
-  const requestedAt =
-    typeof input.requestedAt === "string" &&
-    Number.isFinite(new Date(input.requestedAt).getTime())
-      ? new Date(input.requestedAt).toISOString()
-      : null;
-
-  if (!mode || !runAt || !requestedAt) {
-    return null;
-  }
-
-  return {
-    mode,
-    runAt,
-    requestedAt,
-  } satisfies ScheduledTestExport;
 }
 
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
@@ -183,7 +133,6 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
           },
         }))
       : [],
-    scheduledTestExport: sanitizeScheduledTestExport(input?.scheduledTestExport),
   } satisfies OperatorState;
 }
 
@@ -403,6 +352,22 @@ export async function getSyncHistory(limit = 20) {
     .slice(0, limit);
 }
 
+export async function getLatestSuccessfulLiveSyncHistory() {
+  const state = await readState();
+
+  return (
+    [...state.history]
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+      .find(
+        (entry) =>
+          entry.ok &&
+          !entry.dryRun &&
+          entry.purpose === "sync" &&
+          (entry.mode === "delta" || entry.mode === "full"),
+      ) ?? null
+  );
+}
+
 export async function appendSyncHistory(entry: SyncHistoryEntry) {
   const state = await readState();
   const combinedHistory = [entry, ...state.history];
@@ -425,39 +390,6 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
   if (evictedHistory.length) {
     await deleteHistoryArtifacts(evictedHistory);
   }
-}
-
-export async function getScheduledTestExport() {
-  const state = await readState();
-  return sanitizeScheduledTestExport(state.scheduledTestExport);
-}
-
-export async function saveScheduledTestExport(input: ScheduledTestExport) {
-  const state = await readState();
-  const scheduledTestExport = sanitizeScheduledTestExport(input);
-
-  if (!scheduledTestExport) {
-    throw new Error("Scheduled test export is invalid.");
-  }
-
-  await writeState({
-    ...state,
-    scheduledTestExport,
-  });
-
-  return scheduledTestExport;
-}
-
-export async function clearScheduledTestExport() {
-  const state = await readState();
-  const scheduledTestExport = sanitizeScheduledTestExport(state.scheduledTestExport);
-
-  await writeState({
-    ...state,
-    scheduledTestExport: null,
-  });
-
-  return scheduledTestExport;
 }
 
 export async function writeRunArtifact(id: string, artifact: unknown) {

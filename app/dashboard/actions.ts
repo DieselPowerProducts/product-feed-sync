@@ -24,10 +24,6 @@ export async function saveSettingsAction(formData: FormData) {
     anchorDate: String(formData.get("anchorDate") ?? ""),
     deltaIntervalDays: readPositiveInteger(formData.get("deltaIntervalDays"), 7),
     fullIntervalDays: readPositiveInteger(formData.get("fullIntervalDays"), 15),
-    lookbackDays: readPositiveInteger(formData.get("lookbackDays"), 8),
-    defaultDryRun:
-      formData.get("defaultDryRun") === "on" ||
-      formData.get("defaultDryRun") === "true",
   });
 
   redirect("/dashboard?saved=settings");

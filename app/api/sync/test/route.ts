@@ -5,6 +5,7 @@ import { DEFAULT_PREVIEW_LIMIT, runSync, type SyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function isSupportedMode(
   value: string | null,

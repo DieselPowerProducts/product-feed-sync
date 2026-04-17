@@ -3,7 +3,6 @@ import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
   getOperatorStoreStatus,
-  getScheduledTestExport,
   getSyncHistory,
   getSyncSettings,
 } from "@/lib/operator-store";
@@ -18,7 +17,6 @@ import {
   logoutAction,
   saveSettingsAction,
 } from "@/app/dashboard/actions";
-import { formatPacificDateTimeInputValue } from "@/lib/test-save";
 
 type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -75,25 +73,6 @@ function prettifyStorageMode(mode: "blob" | "local" | "memory") {
   return "In-memory";
 }
 
-function describeRunSource(entry: {
-  trigger: "cron" | "manual";
-  purpose: "sync" | "test-save" | null;
-}) {
-  if (entry.trigger === "cron" && entry.purpose === "sync") {
-    return "scheduled real sync";
-  }
-
-  if (entry.trigger === "cron" && entry.purpose === "test-save") {
-    return "scheduled test save";
-  }
-
-  if (entry.trigger === "manual" && entry.purpose === "test-save") {
-    return "manual test save";
-  }
-
-  return entry.trigger === "cron" ? "scheduled" : "manual";
-}
-
 function getSavedMessage(saved: string | undefined) {
   switch (saved) {
     case "settings":
@@ -106,25 +85,10 @@ function getSavedMessage(saved: string | undefined) {
         tone: "success" as const,
         text: "The test save finished and the downloadable file is ready below.",
       };
-    case "test-export-scheduled":
-      return {
-        tone: "success" as const,
-        text: "A one-time test save was scheduled for tomorrow at 7:00 AM Pacific.",
-      };
-    case "test-export-cancelled":
-      return {
-        tone: "success" as const,
-        text: "The pending test save was cancelled.",
-      };
     case "test-export-invalid":
       return {
         tone: "error" as const,
         text: "Choose either a delta or full test save.",
-      };
-    case "test-export-invalid-effective-time":
-      return {
-        tone: "error" as const,
-        text: "The selected Pacific test date/time was invalid.",
       };
     case "test-export-failed":
       return {
@@ -153,23 +117,21 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const searchParams = props.searchParams ? await props.searchParams : {};
   const now = new Date();
-  const [settings, history, storeStatus, shopifyConnection, scheduledTestExport] =
+  const [settings, history, storeStatus, shopifyConnection] =
     await Promise.all([
     getSyncSettings(),
     getSyncHistory(20),
     Promise.resolve(getOperatorStoreStatus()),
     getRuntimeShopifyConnection(),
-    getScheduledTestExport(),
   ]);
   const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
   const saved = getSearchParam(searchParams, "saved");
   const flashMessage = getSavedMessage(saved);
-  const downloadableExports = history.filter((entry) => entry.exportArtifactId);
-  const requestedTestAt = getSearchParam(searchParams, "testAt");
-  const defaultTestSaveDateTime = requestedTestAt
-    ? formatPacificDateTimeInputValue(requestedTestAt)
-    : "";
+  const syncHistory = history.filter((entry) => entry.purpose !== "test-save");
+  const testSaveFiles = history.filter(
+    (entry) => entry.purpose === "test-save" && entry.exportArtifactId,
+  );
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
@@ -189,8 +151,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </h1>
             <p className="max-w-2xl text-base leading-8 text-muted md:text-lg">
               This dashboard is for validating normalized feed output and
-              controlling the sync Schedule before Google Merchant writes are
-              turned on.
+              controlling the sync schedule before Monday live Merchant Center
+              pushes start.
             </p>
           </div>
 
@@ -286,30 +248,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </label>
             </div>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-foreground">
-                Delta lookback (days)
-              </span>
-              <input
-                name="lookbackDays"
-                type="number"
-                min={1}
-                defaultValue={settings.lookbackDays}
-                className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-              />
-            </label>
-
-            <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/65 px-4 py-4 text-sm">
-              <input
-                name="defaultDryRun"
-                type="checkbox"
-                defaultChecked={settings.defaultDryRun}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              Keep scheduled syncs in dry-run mode by default until Google write
-              paths are ready.
-            </label>
-
             <button
               type="submit"
               className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
@@ -396,16 +334,16 @@ export default async function DashboardPage(props: DashboardPageProps) {
               Run history
             </p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-              Previous sync and test-save attempts
+              Previous sync attempts
             </h2>
           </div>
           <p className="text-sm text-muted">
-            Google writes are disabled, so this currently reflects preview and
-            sync-side QA runs only.
+            Dry-run previews stay read-only. Live sync attempts now write
+            through the Merchant API when dry run is disabled.
           </p>
         </div>
 
-        {history.length ? (
+        {syncHistory.length ? (
           <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-sm">
@@ -420,7 +358,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((entry) => (
+                  {syncHistory.map((entry) => (
                     <tr key={entry.id} className="border-b border-line/70 align-top last:border-b-0">
                       <td className="px-4 py-4">
                         <p className="font-semibold text-foreground">
@@ -560,55 +498,23 @@ export default async function DashboardPage(props: DashboardPageProps) {
               method="post"
               className="mt-4 grid gap-4"
             >
-              <input type="hidden" name="intent" value="save" />
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-foreground">
                   Test mode
                 </span>
                 <select
                   name="mode"
-                  defaultValue={scheduledTestExport?.mode ?? "full"}
+                  defaultValue="full"
                   className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
                 >
                   <option value="full">Full product test save</option>
                   <option value="delta">Delta product test save</option>
                 </select>
               </label>
-
-              <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/75 px-4 py-4 text-sm leading-7 text-foreground">
-                <span className="grid flex-1 gap-2">
-                  <span className="text-sm font-medium text-foreground">
-                    Effective Pacific date/time
-                  </span>
-                  <input
-                    name="effectiveAt"
-                    type="datetime-local"
-                    defaultValue={defaultTestSaveDateTime}
-                    className="rounded-2xl border border-line bg-white/80 px-4 py-3 outline-none transition-shadow focus:shadow-[0_0_0_4px_rgba(197,92,22,0.12)]"
-                  />
-                </span>
-              </label>
-
-              <label className="flex items-center gap-3 rounded-2xl border border-line bg-white/75 px-4 py-4 text-sm leading-7 text-foreground">
-                <input
-                  name="scheduleTomorrow"
-                  type="checkbox"
-                  className="h-4 w-4 accent-[var(--accent)]"
-                />
-                Actually schedule this saved file for tomorrow at 7:00 AM
-                Pacific instead of running it right now.
-              </label>
-
               <p className="text-sm leading-7 text-muted">
-                Leave the schedule box off to run immediately. The date/time
-                field lets you simulate a future Pacific timestamp right now so
-                you can test tomorrow&apos;s delta window without waiting.
-              </p>
-
-              <p className="text-sm leading-7 text-muted">
-                The overnight scheduler still only runs once each morning on
-                the current Vercel setup. Scheduled test saves replace any
-                existing pending one-time test.
+                Test saves always run immediately and stay in dry-run mode. Use
+                them to generate a comparison file without touching Merchant
+                Center.
               </p>
 
               <button
@@ -622,149 +528,73 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
           <article className="rounded-[1.5rem] border border-line bg-white/65 p-5">
             <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-              Pending schedule
+              Test Save Files
             </p>
-            {scheduledTestExport ? (
+            {testSaveFiles.length ? (
               <div className="mt-4 grid gap-4">
-                <div className="rounded-[1.25rem] border border-line bg-white/80 p-4">
-                  <p className="text-2xl font-semibold tracking-[-0.04em] text-foreground">
-                    {scheduledTestExport.mode === "full"
-                      ? "Full product test save"
-                      : "Delta product test save"}
-                  </p>
-                  <p className="mt-3 text-sm leading-7 text-muted">
-                    Scheduled for {formatTimestamp(scheduledTestExport.runAt)}.
-                    The file will appear below as soon as the overnight job
-                    finishes.
-                  </p>
-                </div>
-
-                <form action="/api/dashboard/test-save" method="post">
-                  <input type="hidden" name="intent" value="cancel" />
-                  <button
-                    type="submit"
-                    className="rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-white"
+                {testSaveFiles.map((entry) => (
+                  <div
+                    key={`${entry.id}-test-save-file`}
+                    className="rounded-[1.25rem] border border-line bg-white/80 p-4"
                   >
-                    Cancel scheduled test
-                  </button>
-                </form>
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="text-2xl font-semibold tracking-[-0.04em] text-foreground">
+                          {entry.mode === "full"
+                            ? "Full product test save"
+                            : "Delta product test save"}
+                        </p>
+                        <p className="mt-3 text-sm leading-7 text-muted">
+                          Ready {formatTimestamp(entry.finishedAt)}.
+                        </p>
+                        <p className="text-sm leading-7 text-muted">
+                          Records {entry.stats.recordsPrepared}, excluded{" "}
+                          {entry.stats.excluded}, validation{" "}
+                          {entry.stats.validationIssues ?? 0}.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <a
+                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=csv`}
+                          className="inline-flex rounded-full bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition-transform hover:-translate-y-0.5"
+                        >
+                          Download CSV
+                        </a>
+                        <a
+                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=xlsx`}
+                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                        >
+                          Download XLSX
+                        </a>
+                        {entry.artifactId ? (
+                          <Link
+                            href={`/dashboard/runs/${entry.artifactId}`}
+                            className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                          >
+                            View sample
+                          </Link>
+                        ) : null}
+                        <form action={deleteHistoryEntryAction}>
+                          <input type="hidden" name="entryId" value={entry.id} />
+                          <button
+                            type="submit"
+                            className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="mt-4 rounded-[1.25rem] border border-dashed border-line bg-white/55 p-4 text-sm leading-7 text-muted">
-                No overnight test save is scheduled right now.
+                No saved test files are ready yet.
               </div>
             )}
           </article>
-        </div>
-
-        <div className="mt-8">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
-                Saved files
-              </p>
-              <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                Download ready-to-compare exports
-              </h3>
-            </div>
-            <p className="text-sm text-muted">
-              Manual test saves stay available until deleted. Real scheduled
-              sync downloads are kept only for the newest two <code>delta</code>{" "}
-              and two <code>full</code> runs, and older scheduled runs stay in
-              history without download buttons.
-            </p>
-          </div>
-
-          {downloadableExports.length ? (
-            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
-                    <tr>
-                      <th className="px-4 py-3">Created</th>
-                      <th className="px-4 py-3">Type</th>
-                      <th className="px-4 py-3">Counts</th>
-                      <th className="px-4 py-3">Source</th>
-                      <th className="px-4 py-3">Downloads</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {downloadableExports.map((entry) => (
-                      <tr
-                        key={`${entry.id}-export`}
-                        className="border-b border-line/70 align-top last:border-b-0"
-                      >
-                        <td className="px-4 py-4">
-                          <p className="font-semibold text-foreground">
-                            {formatTimestamp(entry.finishedAt)}
-                          </p>
-                          <p className="mt-2 text-muted">
-                            Started {formatTimestamp(entry.startedAt)}
-                          </p>
-                        </td>
-                        <td className="px-4 py-4">
-                          <p className="font-semibold text-foreground">
-                            {entry.mode}
-                          </p>
-                          <p className="mt-2 text-muted">
-                            {entry.dryRun ? "dry run" : "live mode flag"}
-                          </p>
-                        </td>
-                        <td className="px-4 py-4 text-muted">
-                          <p>Products: {entry.stats.productsFetched}</p>
-                          <p className="mt-2">
-                            Records: {entry.stats.recordsPrepared}
-                          </p>
-                          <p className="mt-2">Excluded: {entry.stats.excluded}</p>
-                        </td>
-                        <td className="px-4 py-4 text-muted">
-                          <p>{describeRunSource(entry)}</p>
-                          <p className="mt-2">{entry.scope}</p>
-                        </td>
-                        <td className="px-4 py-4">
-                          <div className="flex flex-wrap gap-2">
-                            <a
-                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=csv`}
-                              className="inline-flex rounded-full bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition-transform hover:-translate-y-0.5"
-                            >
-                              Download CSV
-                            </a>
-                            <a
-                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=xlsx`}
-                              className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                            >
-                              Download XLSX
-                            </a>
-                            {entry.artifactId ? (
-                              <Link
-                                href={`/dashboard/runs/${entry.artifactId}`}
-                                className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                              >
-                                View sample
-                              </Link>
-                            ) : null}
-                            <form action={deleteHistoryEntryAction}>
-                              <input type="hidden" name="entryId" value={entry.id} />
-                              <button
-                                type="submit"
-                                className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                              >
-                                Delete
-                              </button>
-                            </form>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
-              No saved comparison files are ready yet.
-            </div>
-          )}
         </div>
       </section>
     </main>

@@ -5,8 +5,8 @@ Next.js operator console for validating a Shopify-to-Google Merchant Center prod
 Current state:
 
 - Shopify connection, feed normalization, preview scanning, cadence controls, and run-history storage are implemented.
-- Google Merchant writes are not implemented yet.
-- This build is read-only against Shopify and safe for feed QA.
+- Merchant API writes are implemented for live sync runs when dry run is disabled.
+- Dashboard previews remain read-only against Shopify and safe for feed QA.
 
 ## What this app controls
 
@@ -42,9 +42,7 @@ The dashboard lets you change:
 - `Anchor date`: the reference date used for cadence math.
 - `Delta interval (days)`: how often delta syncs become due.
 - `Full interval (days)`: how often full syncs become due.
-- `Delta lookback (days)`: how far back delta mode searches Shopify `updated_at`.
 - `Default preview rows`: default row count for preview tables.
-- `Default dry run`: default flag used by cron and manual sync runs.
 
 What each section means:
 
@@ -58,7 +56,7 @@ The preview panel does not push anything to Google Merchant. It only scans Shopi
 
 Preview modes:
 
-- `Delta preview`: scans products updated inside the current lookback window and stops once enough preview rows are collected.
+- `Delta preview`: scans products changed inside the current delta checkpoint window and stops once enough preview rows are collected.
 - `Full preview`: scans the full matching catalog and still shows only the requested preview-row count.
 
 Preview controls:

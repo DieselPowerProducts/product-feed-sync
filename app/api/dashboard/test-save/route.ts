@@ -5,16 +5,8 @@ import {
   isOperatorAuthConfigured,
   isValidOperatorSessionValue,
 } from "@/lib/operator-auth";
-import {
-  clearScheduledTestExport,
-  getSyncSettings,
-  saveScheduledTestExport,
-} from "@/lib/operator-store";
+import { getSyncSettings } from "@/lib/operator-store";
 import { runSync, type SyncMode } from "@/lib/sync";
-import {
-  getTomorrowPacificTestExportRunAt,
-  parsePacificDateTimeInputValue,
-} from "@/lib/test-save";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -47,48 +39,19 @@ export async function POST(request: NextRequest) {
   }
 
   const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "save");
-
-  if (intent === "cancel") {
-    await clearScheduledTestExport();
-    return redirectToDashboard(request, "test-export-cancelled");
-  }
-
   const mode = formData.get("mode");
 
   if (!isSupportedMode(mode)) {
     return redirectToDashboard(request, "test-export-invalid");
   }
 
-  const scheduleTomorrow =
-    formData.get("scheduleTomorrow") === "on" ||
-    formData.get("scheduleTomorrow") === "true";
-  const effectiveAtValue = String(formData.get("effectiveAt") ?? "").trim();
-  const effectiveNow = effectiveAtValue
-    ? parsePacificDateTimeInputValue(effectiveAtValue)
-    : null;
-
-  if (effectiveAtValue && !effectiveNow) {
-    return redirectToDashboard(request, "test-export-invalid-effective-time");
-  }
-
-  if (scheduleTomorrow) {
-    await saveScheduledTestExport({
-      mode,
-      runAt: getTomorrowPacificTestExportRunAt().toISOString(),
-      requestedAt: new Date().toISOString(),
-    });
-    return redirectToDashboard(request, "test-export-scheduled");
-  }
-
   const settings = await getSyncSettings();
   const result = await runSync(mode, {
     trigger: "manual",
     purpose: "test-save",
-    dryRun: settings.defaultDryRun,
+    dryRun: true,
     settings,
     prepareExportArtifact: true,
-    effectiveNow: effectiveNow ?? undefined,
   });
 
   return redirectToDashboard(

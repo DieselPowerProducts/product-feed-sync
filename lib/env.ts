@@ -42,8 +42,6 @@ export const env = {
     7,
   ),
   fullIntervalDays: readPositiveInteger(process.env.SYNC_FULL_INTERVAL_DAYS, 15),
-  defaultDryRun: readBoolean(process.env.SYNC_DEFAULT_DRY_RUN, true),
-  lookbackDays: readPositiveInteger(process.env.SYNC_LOOKBACK_DAYS, 8),
   shopifyStoreDomain: process.env.SHOPIFY_STORE_DOMAIN ?? "",
   shopifyClientId: process.env.SHOPIFY_CLIENT_ID ?? "",
   shopifyClientSecret: process.env.SHOPIFY_CLIENT_SECRET ?? "",
@@ -124,10 +122,10 @@ export function isAuthorizedManualRequest(request: NextRequest) {
 
 export function readDryRunValue(value: string | null) {
   if (!value) {
-    return env.defaultDryRun;
+    return false;
   }
 
-  return readBoolean(value, env.defaultDryRun);
+  return readBoolean(value, false);
 }
 
 export function hasEnvValue(value?: string | null) {

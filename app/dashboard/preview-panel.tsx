@@ -78,7 +78,7 @@ export function PreviewPanel(props: {
           ? "Counting active Shopify products in the full catalog."
           : intent === "full"
             ? "Counting Shopify products in the current delta window for the full export."
-            : "Counting Shopify products in the current delta lookback window.",
+            : "Counting Shopify products in the current delta checkpoint window.",
     });
     setResult(null);
 
@@ -438,7 +438,7 @@ export function PreviewPanel(props: {
           <FeedPreviewTable
             records={result.preview}
             emptyMessage={
-              "No Merchant API payload rows matched this preview. That usually means the delta lookback window returned no changed products, or the current exclusion rules filtered everything out. Try a full preview next."
+              "No Merchant API payload rows matched this preview. That usually means the current delta checkpoint returned no changed products, or the current exclusion rules filtered everything out. Try a full preview next."
             }
           />
 

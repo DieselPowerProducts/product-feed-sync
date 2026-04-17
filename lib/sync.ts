@@ -1,7 +1,13 @@
 import { env, getConfigurationStatus } from "@/lib/env";
+import {
+  syncMerchantCatalog,
+  type MerchantCatalogSyncSummary,
+  type MerchantDeleteTarget,
+} from "@/lib/google-merchant";
 import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
+  getLatestSuccessfulLiveSyncHistory,
   getSyncSettings,
   writePreviewExportArtifact,
   writeRunArtifact,
@@ -17,6 +23,7 @@ import {
 } from "@/lib/shopify";
 
 const MS_PER_DAY = 86_400_000;
+const MS_PER_MINUTE = 60_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
 const CRON_HOUR_UTC = 9;
@@ -32,6 +39,8 @@ const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
 const SHOPIFY_REFERENCE_GID_PATTERN = /gid:\/\/shopify\//i;
+const DELTA_SYNC_OVERLAP_MINUTES = 5;
+const DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS = 8;
 
 const SHOPIFY_REFERENCE_METAFIELD_FIELDS = `
           value
@@ -461,6 +470,13 @@ export interface ExcludedPreviewSample {
   link?: string | null;
 }
 
+interface SyncSearchPlan {
+  query: string;
+  lookbackStart: string | null;
+  source: "full_catalog" | "live_sync_checkpoint" | "lookback_fallback";
+  notes: string[];
+}
+
 export interface SyncRunArtifact {
   id: string;
   startedAt: string;
@@ -480,6 +496,7 @@ export interface SyncRunArtifact {
   includedSample: FeedPreviewRecord[];
   validationSample: ExcludedPreviewSample[];
   excludedSample: ExcludedPreviewSample[];
+  merchant?: SyncRunResult["merchant"];
 }
 
 export interface SyncRunResult {
@@ -508,10 +525,17 @@ export interface SyncRunResult {
     excluded: number;
     validationIssues: number;
     previewLimit: number;
+    merchantUpsertsAttempted?: number;
+    merchantUpsertsSucceeded?: number;
+    merchantDeletesAttempted?: number;
+    merchantDeletesSucceeded?: number;
+    merchantReconciliationDeletes?: number;
+    merchantWriteErrors?: number;
   };
   exclusions: Record<string, number>;
   preview: FeedPreviewRecord[];
   exportArtifactId?: string | null;
+  merchant?: MerchantCatalogSyncSummary | null;
 }
 
 export interface SyncExportResult {
@@ -714,8 +738,6 @@ function getDefaultSyncSettings(): SyncSettings {
     anchorDate: env.syncAnchorDate,
     deltaIntervalDays: env.deltaIntervalDays,
     fullIntervalDays: env.fullIntervalDays,
-    defaultDryRun: env.defaultDryRun,
-    lookbackDays: env.lookbackDays,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1411,7 +1433,12 @@ function validateFeedRecord(params: {
 }
 
 function findProductExclusionReason(product: ShopifyProductNode) {
+  const normalizedStatus = normalizeText(product.status)?.toLowerCase() ?? null;
   const normalizedTags = product.tags.map((tag) => tag.trim().toLowerCase());
+
+  if (normalizedStatus && normalizedStatus !== "active") {
+    return `shopify_status_${normalizedStatus}`;
+  }
 
   if (normalizedTags.includes("google_exclude")) {
     return "google_exclude_tag";
@@ -1424,44 +1451,111 @@ function findProductExclusionReason(product: ShopifyProductNode) {
   return null;
 }
 
+function buildDeleteTarget(params: {
+  product: ShopifyProductNode;
+  variant: ShopifyVariantNode;
+  reason: string;
+}): MerchantDeleteTarget {
+  const productId = resolveLegacyId(
+    params.product.legacyResourceId,
+    params.product.id,
+  );
+  const variantId = resolveLegacyId(
+    params.variant.legacyResourceId,
+    params.variant.id,
+  );
+
+  return {
+    offerId: `shopify_ZZ_${productId}_${variantId}`,
+    contentLanguage: env.googleContentLanguage || "en",
+    feedLabel: env.googleFeedLabel || "US",
+    reason: params.reason,
+    productId,
+    variantId,
+    title: params.product.title,
+    variantTitle: params.variant.title,
+  };
+}
+
 function buildSyncScope(
   mode: Exclude<SyncMode, "idle">,
-  lookbackStart: string | null,
+  searchPlan: SyncSearchPlan,
   settings: SyncSettings,
   exhaustive: boolean,
 ) {
   if (mode === "full") {
     return exhaustive
-      ? "Active Shopify products with online-store URLs, scanned across all matching pages in paginated batches of up to 250."
-      : "Active Shopify products with online-store URLs, sampled from the full catalog in paginated batches of up to 250.";
+      ? "All Shopify products are scanned across active, draft, and archived statuses so current feed rows can be inserted and inactive rows can be deleted from Merchant Center."
+      : "Shopify products are sampled across all statuses from the full catalog for previewing.";
   }
 
-  return lookbackStart
-    ? exhaustive
-      ? `Active Shopify products updated after ${lookbackStart}, scanned across all matching pages.`
-      : `Active Shopify products updated after ${lookbackStart}, sampled until the preview row target is met.`
-    : `Products created or updated in the last ${settings.lookbackDays} day(s).`;
+  if (searchPlan.source === "live_sync_checkpoint" && searchPlan.lookbackStart) {
+    return exhaustive
+      ? `Shopify products changed after ${searchPlan.lookbackStart} are scanned exhaustively using the last successful live-sync checkpoint, including inactive or excluded products that now need Merchant deletes.`
+      : `Shopify products changed after ${searchPlan.lookbackStart} are sampled using the last successful live-sync checkpoint.`;
+  }
+
+  return exhaustive
+    ? `Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day window are scanned exhaustively because no live-sync checkpoint exists yet.`
+    : `Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day window are sampled because no live-sync checkpoint exists yet.`;
 }
 
-function buildSearchQuery(
+async function buildSearchQuery(
   mode: Exclude<SyncMode, "idle">,
   settings: SyncSettings,
-  now = new Date(),
-) {
+  options?: {
+    dryRun: boolean;
+    now?: Date;
+  },
+): Promise<SyncSearchPlan> {
+  const now = options?.now ?? new Date();
+
   if (mode === "full") {
     return {
-      query: "status:active",
+      query: "",
       lookbackStart: null,
+      source: "full_catalog",
+      notes: [
+        "Full sync scans all Shopify product statuses. Feed inserts still only include active, non-excluded, valid rows.",
+      ],
     };
   }
 
+  const latestLiveSync = await getLatestSuccessfulLiveSyncHistory();
+
+  if (latestLiveSync) {
+    const checkpointStart = new Date(latestLiveSync.startedAt);
+    const lookbackStart = new Date(
+      checkpointStart.getTime() - DELTA_SYNC_OVERLAP_MINUTES * MS_PER_MINUTE,
+    );
+
+    return {
+      query: `updated_at:>'${lookbackStart.toISOString()}'`,
+      lookbackStart: lookbackStart.toISOString(),
+      source: "live_sync_checkpoint",
+      notes: [
+        `Delta scope uses the last successful live sync at ${latestLiveSync.startedAt} with a ${DELTA_SYNC_OVERLAP_MINUTES}-minute overlap safeguard.`,
+      ],
+    };
+  }
+
+  if (!options?.dryRun) {
+    throw new Error(
+      "Live delta sync requires a successful live sync baseline. Run a live full sync first so Merchant Center has a complete catalog before deltas start.",
+    );
+  }
+
   const lookbackStart = new Date(
-    now.getTime() - settings.lookbackDays * MS_PER_DAY,
+    now.getTime() - DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS * MS_PER_DAY,
   );
 
   return {
-    query: `status:active updated_at:>'${lookbackStart.toISOString()}'`,
+    query: `updated_at:>'${lookbackStart.toISOString()}'`,
     lookbackStart: lookbackStart.toISOString(),
+    source: "lookback_fallback",
+    notes: [
+      `No successful live sync baseline exists yet, so this delta preview fell back to the last ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS} days of Shopify changes.`,
+    ],
   };
 }
 
@@ -1735,35 +1829,53 @@ async function buildDryRunPreview(params: {
   artifactSampleLimit: number;
   settings: SyncSettings;
   exhaustive: boolean;
+  dryRun: boolean;
   effectiveNow?: Date;
   collectAllRecords?: boolean;
+  captureDeleteCandidates?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
+  const search = await buildSearchQuery(params.mode, params.settings, {
+    dryRun: params.dryRun,
+    now: params.effectiveNow,
+  });
   const createProgressMessage = (
     stage: "counting" | "scanning",
     totalProductsValue: number | null,
   ) => {
     if (params.mode === "full") {
       if (stage === "counting") {
-        return "Counting active Shopify products in the full catalog.";
+        return "Counting Shopify products across the full catalog.";
       }
 
       if (typeof totalProductsValue === "number") {
-        return `Found ${totalProductsValue.toLocaleString()} matching products. Scanning and normalizing the full catalog.`;
+        return `Found ${totalProductsValue.toLocaleString()} Shopify products across all statuses. Scanning the full catalog.`;
       }
 
       return "Scanning and normalizing the full catalog.";
     }
 
+    if (search.source === "live_sync_checkpoint") {
+      if (stage === "counting") {
+        return "Counting Shopify products changed since the last successful live sync.";
+      }
+
+      if (typeof totalProductsValue === "number") {
+        return `Found ${totalProductsValue.toLocaleString()} products in the current delta checkpoint window. Scanning matches, including items that now require Merchant deletes.`;
+      }
+
+      return "Scanning Shopify products changed since the last successful live sync.";
+    }
+
     if (stage === "counting") {
-      return `Counting Shopify products updated in the last ${params.settings.lookbackDays} day(s).`;
+      return `Counting Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window.`;
     }
 
     if (typeof totalProductsValue === "number") {
-      return `Found ${totalProductsValue.toLocaleString()} products in the current delta window. Scanning and normalizing matches.`;
+      return `Found ${totalProductsValue.toLocaleString()} products in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window. Scanning matches.`;
     }
 
-    return `Scanning Shopify products updated in the last ${params.settings.lookbackDays} day(s).`;
+    return `Scanning Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window.`;
   };
 
   const shop = getConfiguredShopDomain();
@@ -1787,17 +1899,13 @@ async function buildDryRunPreview(params: {
   const storefrontBaseUrl = connection.connected
     ? connection.shop?.primaryDomainUrl ?? null
     : null;
-  const search = buildSearchQuery(
-    params.mode,
-    params.settings,
-    params.effectiveNow,
-  );
   const preview: FeedPreviewRecord[] = [];
   const allRecords: FeedPreviewRecord[] = [];
   const allExcludedRows: ExcludedPreviewSample[] = [];
   const allValidationRows: ExcludedPreviewSample[] = [];
   const validationSamples: ExcludedPreviewSample[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
+  const deleteCandidates: MerchantDeleteTarget[] = [];
   const exclusions: Record<string, number> = {};
   let totalProducts: number | null = null;
   let cursor: string | null = null;
@@ -1897,12 +2005,16 @@ async function buildDryRunPreview(params: {
     pagesScanned += 1;
     productsFetched += products.length;
 
+    const shouldHydrateDetails =
+      params.collectAllRecords ||
+      params.captureDeleteCandidates ||
+      preview.length < params.artifactSampleLimit;
     const candidateIds: string[] = [];
 
     for (const product of products) {
       const exclusionReason = findProductExclusionReason(product);
 
-      if (exclusionReason) {
+      if (exclusionReason && !shouldHydrateDetails) {
         const excludedRow = {
           reason: exclusionReason,
           productId: resolveLegacyId(product.legacyResourceId, product.id),
@@ -1932,9 +2044,6 @@ async function buildDryRunPreview(params: {
       candidateIds.push(product.id);
     }
 
-    const shouldHydrateDetails =
-      params.collectAllRecords || preview.length < params.artifactSampleLimit;
-
     const detailPayloads = shouldHydrateDetails
       ? await Promise.all(
           chunkArray(candidateIds, DETAIL_BATCH_SIZE).map((batchIds) =>
@@ -1961,6 +2070,7 @@ async function buildDryRunPreview(params: {
       for (const product of detailedProducts) {
         const productId = resolveLegacyId(product.legacyResourceId, product.id);
         const productMediaUrls = collectMediaUrls(product);
+        const productExclusionReason = findProductExclusionReason(product);
         const initialVariants = connectionNodes<ShopifyVariantNode>(product.variants);
         const variants = product.variants?.pageInfo?.hasNextPage
           ? await fetchAllProductVariants({
@@ -1971,6 +2081,65 @@ async function buildDryRunPreview(params: {
               afterCursor: product.variants.pageInfo.endCursor ?? null,
             })
           : initialVariants;
+
+        if (productExclusionReason) {
+          if (variants.length === 0) {
+            const excludedRow = {
+              reason: productExclusionReason,
+              productId,
+              variantId: null,
+              offerId: null,
+              handle: product.handle,
+              title: product.title,
+              variantTitle: null,
+              sku: null,
+              link: product.onlineStoreUrl ?? null,
+            } satisfies ExcludedPreviewSample;
+            incrementCounter(exclusions, productExclusionReason);
+            collectExcludedSample(excludedSamples, excludedRow);
+            if (params.collectAllRecords) {
+              allExcludedRows.push(excludedRow);
+            }
+          }
+
+          for (const variant of variants) {
+            variantsConsidered += 1;
+            const deleteTarget = buildDeleteTarget({
+              product,
+              variant,
+              reason: productExclusionReason,
+            });
+            const excludedRow = {
+              reason: productExclusionReason,
+              productId,
+              variantId: deleteTarget.variantId ?? null,
+              offerId: deleteTarget.offerId,
+              handle: product.handle,
+              title: product.title,
+              variantTitle: variant.title,
+              sku: variant.sku ?? null,
+              link: product.onlineStoreUrl ?? null,
+            } satisfies ExcludedPreviewSample;
+
+            incrementCounter(exclusions, productExclusionReason);
+            collectExcludedSample(excludedSamples, excludedRow);
+            if (params.collectAllRecords) {
+              allExcludedRows.push(excludedRow);
+            }
+            if (params.captureDeleteCandidates) {
+              deleteCandidates.push(deleteTarget);
+            }
+          }
+
+          productsEvaluated += 1;
+          await sendScanningProgress();
+
+          if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
+            break;
+          }
+
+          continue;
+        }
 
         for (const variant of variants) {
           variantsConsidered += 1;
@@ -2006,6 +2175,15 @@ async function buildDryRunPreview(params: {
               if (params.collectAllRecords) {
                 allValidationRows.push(excludedRow);
               }
+            }
+            if (params.captureDeleteCandidates) {
+              deleteCandidates.push(
+                buildDeleteTarget({
+                  product,
+                  variant,
+                  reason: record.excluded,
+                }),
+              );
             }
             continue;
           }
@@ -2072,12 +2250,15 @@ async function buildDryRunPreview(params: {
   }
 
   return {
+    searchPlan: search,
     query: search.query,
     lookbackStart: search.lookbackStart,
+    searchNotes: search.notes,
     storefrontBaseUrl,
     allRecords,
     allExcludedRows,
     allValidationRows,
+    deleteCandidates,
     preview: preview.slice(0, params.previewLimit),
     includedSamples: preview.slice(0, params.artifactSampleLimit),
     validationSamples,
@@ -2099,22 +2280,47 @@ function buildSyncNotes(params: {
   previewLimit: number;
   scanCompleted: boolean;
   validationIssues: number;
+  searchNotes: string[];
+  merchant?: MerchantCatalogSyncSummary | null;
+  testSavePurpose?: boolean;
 }) {
   const notes = [
-    "Dry-run preview fetched live Shopify data and normalized it toward the Google Merchant API productInputs shape.",
+    ...params.searchNotes,
+    "Shopify data is normalized into the Google Merchant API productInputs shape before any live write is attempted.",
     "This build paginates Shopify products in batches of up to 250 using GraphQL cursors.",
     `Product core details are hydrated in batches of ${DETAIL_BATCH_SIZE} products, and each product's variants are paged separately in batches of up to ${DETAIL_VARIANT_PAGE_SIZE}.`,
-    "No Google Merchant API writes run yet. The next step is posting the validated records to a Merchant API data source.",
+    "Merchant Center can take several minutes to reflect productInput inserts or deletes after the API call succeeds.",
   ];
 
-  if (params.dryRun) {
+  if (params.testSavePurpose) {
     notes.unshift(
-      "Dry run is enabled. This is the safest mode for previewing mappings before any live feed writes.",
+      "Test-save runs always stay in dry-run mode and only prepare QA exports.",
+    );
+  } else if (params.dryRun) {
+    notes.unshift(
+      "Dry run is enabled. Shopify is scanned live, but no Merchant Center writes are attempted.",
     );
   } else {
-    notes.unshift(
-      "Dry run is disabled, but this build still does not perform Google writes yet.",
-    );
+    const merchantSummary = params.merchant;
+    const writeSummary = merchantSummary
+      ? `Live Merchant sync wrote ${merchantSummary.upsertsSucceeded}/${merchantSummary.upsertsAttempted} upserts and ${merchantSummary.deletesSucceeded}/${merchantSummary.deletesAttempted} deletes to ${merchantSummary.dataSourceName}.`
+      : "Live Merchant sync mode is enabled.";
+
+    notes.unshift(writeSummary);
+
+    if (merchantSummary?.reconciliationDeletes) {
+      notes.push(
+        `Full-catalog reconciliation identified ${merchantSummary.reconciliationDeletes} Merchant rows that were missing from the current Shopify feed and queued them for deletion.`,
+      );
+    }
+
+    if (merchantSummary && merchantSummary.errorCount > 0) {
+      notes.unshift(
+        `Merchant API returned ${merchantSummary.errorCount} write error(s). Review the run sample before trusting this sync.`,
+      );
+    } else {
+      notes.push("Merchant API writes completed without request-level errors.");
+    }
   }
 
   if (params.exhaustive) {
@@ -2134,7 +2340,7 @@ function buildSyncNotes(params: {
 
   if (params.validationIssues > 0) {
     notes.unshift(
-      `Feed validation blocked ${params.validationIssues} row(s) because required Google fields were missing or invalid. Open the run sample for the affected products.`,
+      `Feed validation blocked ${params.validationIssues} row(s) from insert/update payloads because required Google fields were missing or invalid.`,
     );
   }
 
@@ -2294,8 +2500,13 @@ export async function runSync(
   const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
   const purpose = options.purpose ?? "sync";
-  const dryRun = options.dryRun ?? settings.defaultDryRun;
-  const exhaustive = options.exhaustive ?? (options.trigger === "cron" || mode === "full");
+  const dryRun = purpose === "test-save" ? true : options.dryRun ?? false;
+  const exhaustive = dryRun
+    ? options.exhaustive ??
+      (options.trigger === "cron" ||
+        mode === "full" ||
+        Boolean(options.prepareExportArtifact))
+    : true;
   const previewLimit = Math.max(
     1,
     Math.min(25, options.previewLimit ?? DEFAULT_PREVIEW_LIMIT),
@@ -2316,20 +2527,32 @@ export async function runSync(
       artifactSampleLimit,
       settings,
       exhaustive,
+      dryRun,
       effectiveNow: options.effectiveNow,
-      collectAllRecords: options.prepareExportArtifact,
+      collectAllRecords: options.prepareExportArtifact || !dryRun,
+      captureDeleteCandidates: !dryRun,
       onProgress: options.onProgress,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
       (sum, count) => sum + count,
       0,
     );
+    const merchant = dryRun
+      ? null
+      : await syncMerchantCatalog({
+          upserts: previewRun.allRecords,
+          deletes: previewRun.deleteCandidates,
+          reconcileWithExistingProducts: mode === "full",
+        });
     const notes = buildSyncNotes({
       dryRun,
       exhaustive,
       previewLimit,
       scanCompleted: previewRun.scanCompleted,
       validationIssues: previewRun.validationIssues,
+      searchNotes: previewRun.searchNotes,
+      merchant,
+      testSavePurpose: purpose === "test-save",
     });
     if (options.effectiveNow) {
       notes.unshift(
@@ -2338,13 +2561,13 @@ export async function runSync(
     }
 
     const result = {
-      ok: true,
+      ok: merchant ? merchant.errorCount === 0 : true,
       trigger: options.trigger,
       purpose,
       mode,
       dryRun,
       exhaustive,
-      scope: buildSyncScope(mode, previewRun.lookbackStart, settings, exhaustive),
+      scope: buildSyncScope(mode, previewRun.searchPlan, settings, exhaustive),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -2363,10 +2586,17 @@ export async function runSync(
         excluded,
         validationIssues: previewRun.validationIssues,
         previewLimit,
+        merchantUpsertsAttempted: merchant?.upsertsAttempted,
+        merchantUpsertsSucceeded: merchant?.upsertsSucceeded,
+        merchantDeletesAttempted: merchant?.deletesAttempted,
+        merchantDeletesSucceeded: merchant?.deletesSucceeded,
+        merchantReconciliationDeletes: merchant?.reconciliationDeletes,
+        merchantWriteErrors: merchant?.errorCount,
       },
       exclusions: previewRun.exclusions,
       preview: previewRun.preview,
       exportArtifactId,
+      merchant,
     } satisfies SyncRunResult;
 
     if (exportArtifactId) {
@@ -2409,6 +2639,7 @@ export async function runSync(
         includedSample: previewRun.includedSamples,
         validationSample: previewRun.validationSamples,
         excludedSample: previewRun.excludedSamples,
+        merchant: result.merchant ?? null,
       };
 
       await writeRunArtifact(artifactId, artifact);
@@ -2419,7 +2650,15 @@ export async function runSync(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown sync execution error.";
-    const search = buildSearchQuery(mode, settings, options.effectiveNow);
+    const search = await buildSearchQuery(mode, settings, {
+      dryRun,
+      now: options.effectiveNow,
+    }).catch(() => ({
+      query: mode === "full" ? "" : "",
+      lookbackStart: null,
+      source: mode === "full" ? "full_catalog" : "lookback_fallback",
+      notes: [],
+    } satisfies SyncSearchPlan));
 
     const result = {
       ok: false,
@@ -2428,7 +2667,7 @@ export async function runSync(
       mode,
       dryRun,
       exhaustive,
-      scope: buildSyncScope(mode, null, settings, exhaustive),
+      scope: buildSyncScope(mode, search, settings, exhaustive),
       startedAt,
       finishedAt: new Date().toISOString(),
       configuration,
@@ -2438,8 +2677,11 @@ export async function runSync(
               `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
             ]
           : []),
-        `Shopify preview fetch failed: ${message}`,
-        "The current code only supports read-only Shopify dry runs. No Google writes were attempted.",
+        ...search.notes,
+        `Sync execution failed: ${message}`,
+        ...(dryRun
+          ? ["No Merchant Center writes were attempted because this run stayed in dry-run mode."]
+          : ["Merchant Center writes may be partial if the failure happened after some requests were sent."]),
       ],
       query: search.query,
       lookbackStart: search.lookbackStart,
@@ -2459,6 +2701,7 @@ export async function runSync(
       exclusions: {},
       preview: [],
       exportArtifactId: null,
+      merchant: null,
     } satisfies SyncRunResult;
 
     if (options.persistHistory ?? true) {
@@ -2501,7 +2744,7 @@ export async function runSyncExport(
 ): Promise<SyncExportResult> {
   const settings = options?.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
-  const dryRun = options?.dryRun ?? settings.defaultDryRun;
+  const dryRun = options?.dryRun ?? false;
   const exhaustive = true;
 
   const previewRun = await buildDryRunPreview({
@@ -2510,6 +2753,7 @@ export async function runSyncExport(
     artifactSampleLimit: 1,
     settings,
     exhaustive,
+    dryRun,
     collectAllRecords: true,
   });
   const excluded = Object.values(previewRun.exclusions).reduce(
@@ -2530,6 +2774,8 @@ export async function runSyncExport(
       previewLimit: DEFAULT_PREVIEW_LIMIT,
       scanCompleted: previewRun.scanCompleted,
       validationIssues: previewRun.validationIssues,
+      searchNotes: previewRun.searchNotes,
+      merchant: null,
     }),
     query: previewRun.query,
     lookbackStart: previewRun.lookbackStart,
