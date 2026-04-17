@@ -31,6 +31,28 @@ const ENGINE_LABEL_TITLE_TAIL_WORDS = 8;
 const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
+const SHOPIFY_REFERENCE_GID_PATTERN = /gid:\/\/shopify\//i;
+
+const SHOPIFY_REFERENCE_METAFIELD_FIELDS = `
+          value
+          type
+          references(first: 10) {
+            edges {
+              node {
+                __typename
+                ... on Metaobject {
+                  handle
+                  label: field(key: "label") {
+                    value
+                  }
+                }
+                ... on TaxonomyValue {
+                  name
+                }
+              }
+            }
+          }
+`;
 
 // Feed-critical metafields stay explicit so feed output never depends on
 // Shopify metafield ordering or pagination.
@@ -87,7 +109,7 @@ const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
           value
         }
         shopifyColorPattern: metafield(namespace: "shopify", key: "color-pattern") {
-          value
+${SHOPIFY_REFERENCE_METAFIELD_FIELDS}
         }
         sizeCustom: metafield(namespace: "custom", key: "size") {
           value
@@ -96,7 +118,7 @@ const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
           value
         }
         shopifySize: metafield(namespace: "shopify", key: "size") {
-          value
+${SHOPIFY_REFERENCE_METAFIELD_FIELDS}
         }
         applicationFeed: metafield(namespace: "feed", key: "application") {
           value
@@ -156,7 +178,7 @@ const EXPLICIT_VARIANT_FEED_METAFIELDS = `
                 value
               }
               shopifyColorPattern: metafield(namespace: "shopify", key: "color-pattern") {
-                value
+${SHOPIFY_REFERENCE_METAFIELD_FIELDS}
               }
               sizeCustom: metafield(namespace: "custom", key: "size") {
                 value
@@ -165,7 +187,7 @@ const EXPLICIT_VARIANT_FEED_METAFIELDS = `
                 value
               }
               shopifySize: metafield(namespace: "shopify", key: "size") {
-                value
+${SHOPIFY_REFERENCE_METAFIELD_FIELDS}
               }
               applicationFeed: metafield(namespace: "feed", key: "application") {
                 value
@@ -548,8 +570,21 @@ interface ShopifyConnection<T> {
   pageInfo?: ShopifyPageInfo;
 }
 
+interface ShopifyMetaobjectFieldValue {
+  value: string | null;
+}
+
+interface ShopifyMetafieldReferenceNode {
+  __typename: string;
+  handle?: string;
+  label?: ShopifyMetaobjectFieldValue | null;
+  name?: string | null;
+}
+
 interface ShopifySingleMetafieldValue {
   value: string | null;
+  type?: string | null;
+  references?: ShopifyConnection<ShopifyMetafieldReferenceNode> | null;
 }
 
 interface ShopifyExplicitFeedMetafields {
@@ -843,7 +878,7 @@ function readExplicitMetafieldValue(
     for (const key of keys) {
       const value = normalizeText(owner?.[key]?.value ?? null);
 
-      if (value) {
+      if (value && !SHOPIFY_REFERENCE_GID_PATTERN.test(value)) {
         return value;
       }
     }
@@ -1077,6 +1112,17 @@ function readSelectedOptionValue(
   return null;
 }
 
+function toUniqueMerchantFacingValues(values: string[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeText(value))
+        .filter(Boolean)
+        .filter((value) => !SHOPIFY_REFERENCE_GID_PATTERN.test(value)),
+    ),
+  );
+}
+
 function collectSerializedMetafieldValues(
   input: unknown,
   accumulator: string[],
@@ -1142,18 +1188,52 @@ function parseSerializedMetafieldValues(value: string | null | undefined) {
 
     collectSerializedMetafieldValues(parsed, collected);
 
-    if (collected.length > 0) {
-      return Array.from(new Set(collected));
-    }
+    return toUniqueMerchantFacingValues(collected);
   } catch {
     // Some Shopify metafields are plain strings instead of serialized JSON.
   }
 
-  return [normalized];
+  return toUniqueMerchantFacingValues([normalized]);
 }
 
-function formatShopifyColorPatternValue(value: string | null | undefined) {
-  const values = parseSerializedMetafieldValues(value);
+function readResolvedMetafieldValues(
+  metafield: ShopifySingleMetafieldValue | null | undefined,
+) {
+  const resolvedValues: string[] = [];
+
+  for (const node of connectionNodes(metafield?.references)) {
+    if (node.__typename === "Metaobject") {
+      const label = normalizeText(node.label?.value ?? null);
+
+      if (label) {
+        resolvedValues.push(label);
+      }
+
+      continue;
+    }
+
+    if (node.__typename === "TaxonomyValue") {
+      const name = normalizeText(node.name);
+
+      if (name) {
+        resolvedValues.push(name);
+      }
+    }
+  }
+
+  const uniqueResolvedValues = toUniqueMerchantFacingValues(resolvedValues);
+
+  if (uniqueResolvedValues.length > 0) {
+    return uniqueResolvedValues;
+  }
+
+  return parseSerializedMetafieldValues(metafield?.value);
+}
+
+function formatShopifyColorPatternValue(
+  metafield: ShopifySingleMetafieldValue | null | undefined,
+) {
+  const values = readResolvedMetafieldValues(metafield);
 
   if (values.length === 0) {
     return null;
@@ -1162,8 +1242,10 @@ function formatShopifyColorPatternValue(value: string | null | undefined) {
   return values.join("/");
 }
 
-function formatSingleShopifyAttributeValue(value: string | null | undefined) {
-  const values = parseSerializedMetafieldValues(value);
+function formatSingleShopifyAttributeValue(
+  metafield: ShopifySingleMetafieldValue | null | undefined,
+) {
+  const values = readResolvedMetafieldValues(metafield);
 
   return values.length === 1 ? values[0] : null;
 }
@@ -1484,7 +1566,7 @@ function buildPreviewRecord(params: {
   const brand = pickFirstNonEmpty(product.vendor);
   const apparelProduct = isApparelProductType(productType, product.productType);
   const shopifyColorPattern = formatShopifyColorPatternValue(
-    readExplicitMetafieldValue([product, variant], ["shopifyColorPattern"]),
+    variant.shopifyColorPattern ?? product.shopifyColorPattern ?? null,
   );
   const explicitColor = readExplicitMetafieldValue(metafieldOwners, [
     "colorCustom",
@@ -1503,7 +1585,7 @@ function buildPreviewRecord(params: {
   const shopifySize =
     totalVariants === 1
       ? formatSingleShopifyAttributeValue(
-          readExplicitMetafieldValue([product, variant], ["shopifySize"]),
+          variant.shopifySize ?? product.shopifySize ?? null,
         )
       : null;
   const color = apparelProduct
