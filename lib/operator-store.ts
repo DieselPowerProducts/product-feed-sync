@@ -81,6 +81,27 @@ export interface PendingShopifyDeleteRecord {
   shopDomain?: string | null;
 }
 
+export interface ActiveSyncRunState {
+  runId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  trigger: "cron" | "manual";
+  purpose: SyncHistoryPurpose;
+  mode: "delta" | "full";
+  status: "queued" | "running" | "completed" | "failed";
+  chunkTargetProducts: number;
+  chunksCompleted: number;
+  message: string;
+  totalProducts: number | null;
+  productsScanned: number;
+  pagesScanned: number;
+  merchantPhase: "reconciling" | "upserts" | "deletes" | null;
+  merchantCompleted: number;
+  merchantTotal: number | null;
+  lastChunkDurationMs: number | null;
+  averageChunkDurationMs: number | null;
+}
+
 interface BootstrapState {
   firstFullSyncCompletedAt: string | null;
 }
@@ -90,6 +111,7 @@ interface OperatorState {
   history: SyncHistoryEntry[];
   pendingDeletes: PendingShopifyDeleteRecord[];
   bootstrap: BootstrapState;
+  activeSyncRun: ActiveSyncRunState | null;
 }
 
 type StorageMode = "blob" | "local" | "memory";
@@ -120,6 +142,7 @@ function defaultState(): OperatorState {
     bootstrap: {
       firstFullSyncCompletedAt: null,
     },
+    activeSyncRun: null,
   };
 }
 
@@ -204,6 +227,72 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
         input?.bootstrap?.firstFullSyncCompletedAt ??
         deriveFirstFullSyncCompletedAt(history),
     },
+    activeSyncRun:
+      input?.activeSyncRun &&
+      (input.activeSyncRun.mode === "delta" || input.activeSyncRun.mode === "full")
+        ? {
+            runId: input.activeSyncRun.runId,
+            startedAt: input.activeSyncRun.startedAt ?? new Date().toISOString(),
+            finishedAt: input.activeSyncRun.finishedAt ?? null,
+            trigger:
+              input.activeSyncRun.trigger === "cron" ? "cron" : "manual",
+            purpose:
+              input.activeSyncRun.purpose === "test-save" ? "test-save" : "sync",
+            mode: input.activeSyncRun.mode,
+            status:
+              input.activeSyncRun.status === "queued" ||
+              input.activeSyncRun.status === "running" ||
+              input.activeSyncRun.status === "completed" ||
+              input.activeSyncRun.status === "failed"
+                ? input.activeSyncRun.status
+                : "queued",
+            chunkTargetProducts: readPositiveInteger(
+              Number(input.activeSyncRun.chunkTargetProducts),
+              1,
+            ),
+            chunksCompleted: Math.max(
+              0,
+              Number(input.activeSyncRun.chunksCompleted ?? 0),
+            ),
+            message: input.activeSyncRun.message ?? "",
+            totalProducts:
+              typeof input.activeSyncRun.totalProducts === "number"
+                ? input.activeSyncRun.totalProducts
+                : null,
+            productsScanned: Math.max(
+              0,
+              Number(input.activeSyncRun.productsScanned ?? 0),
+            ),
+            pagesScanned: Math.max(
+              0,
+              Number(input.activeSyncRun.pagesScanned ?? 0),
+            ),
+            merchantPhase:
+              input.activeSyncRun.merchantPhase === "reconciling" ||
+              input.activeSyncRun.merchantPhase === "upserts" ||
+              input.activeSyncRun.merchantPhase === "deletes"
+                ? input.activeSyncRun.merchantPhase
+                : null,
+            merchantCompleted: Math.max(
+              0,
+              Number(input.activeSyncRun.merchantCompleted ?? 0),
+            ),
+            merchantTotal:
+              typeof input.activeSyncRun.merchantTotal === "number"
+                ? input.activeSyncRun.merchantTotal
+                : null,
+            lastChunkDurationMs:
+              typeof input.activeSyncRun.lastChunkDurationMs === "number" &&
+              Number.isFinite(input.activeSyncRun.lastChunkDurationMs)
+                ? input.activeSyncRun.lastChunkDurationMs
+                : null,
+            averageChunkDurationMs:
+              typeof input.activeSyncRun.averageChunkDurationMs === "number" &&
+              Number.isFinite(input.activeSyncRun.averageChunkDurationMs)
+                ? input.activeSyncRun.averageChunkDurationMs
+                : null,
+          }
+        : null,
   } satisfies OperatorState;
 }
 
@@ -434,6 +523,61 @@ export async function getBootstrapState() {
   return {
     firstFullSyncCompletedAt: state.bootstrap.firstFullSyncCompletedAt,
   };
+}
+
+export async function getActiveSyncRun() {
+  const state = await readState();
+  return state.activeSyncRun;
+}
+
+export async function setActiveSyncRun(run: ActiveSyncRunState) {
+  const state = await readState();
+
+  await writeState({
+    ...state,
+    activeSyncRun: run,
+  });
+
+  return run;
+}
+
+export async function updateActiveSyncRun(
+  runId: string,
+  patch: Partial<ActiveSyncRunState>,
+) {
+  const state = await readState();
+
+  if (!state.activeSyncRun || state.activeSyncRun.runId !== runId) {
+    return null;
+  }
+
+  const activeSyncRun = {
+    ...state.activeSyncRun,
+    ...patch,
+    runId,
+  } satisfies ActiveSyncRunState;
+
+  await writeState({
+    ...state,
+    activeSyncRun,
+  });
+
+  return activeSyncRun;
+}
+
+export async function clearActiveSyncRun(runId: string) {
+  const state = await readState();
+
+  if (!state.activeSyncRun || state.activeSyncRun.runId !== runId) {
+    return false;
+  }
+
+  await writeState({
+    ...state,
+    activeSyncRun: null,
+  });
+
+  return true;
 }
 
 export async function getPendingShopifyDeletes() {

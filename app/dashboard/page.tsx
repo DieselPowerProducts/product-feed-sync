@@ -17,7 +17,6 @@ import {
 import {
   deleteHistoryEntryAction,
   logoutAction,
-  runFirstFullSyncAction,
   saveSettingsAction,
 } from "@/app/dashboard/actions";
 
@@ -286,7 +285,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 This action disappears forever after the first successful live
                 full sync.
               </p>
-              <FirstFullSyncButton action={runFirstFullSyncAction} />
+              <FirstFullSyncButton />
             </div>
           ) : null}
         </article>
@@ -602,6 +601,18 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
                         >
                           Download XLSX
+                        </a>
+                        <a
+                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&kind=validation&format=csv`}
+                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                        >
+                          Validation CSV
+                        </a>
+                        <a
+                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&kind=excluded&format=csv`}
+                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                        >
+                          Excluded CSV
                         </a>
                         {entry.artifactId ? (
                           <Link

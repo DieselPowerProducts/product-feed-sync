@@ -138,6 +138,26 @@ export interface MerchantCatalogSyncSummary {
   deleteTargetKeysSucceeded: string[];
 }
 
+export interface MerchantCatalogSyncProgress {
+  phase: "reconciling" | "upserts" | "deletes";
+  completed: number;
+  total: number | null;
+  errors: number;
+  message: string;
+}
+
+export interface MerchantWriteBatchSummary {
+  attempted: number;
+  succeeded: number;
+  errorCount: number;
+  errors: MerchantSyncError[];
+}
+
+export interface MerchantDeleteBatchSummary extends MerchantWriteBatchSummary {
+  deleteTargetKeysSucceeded: string[];
+  deleteTargetsSample: MerchantDeleteTarget[];
+}
+
 export interface GoogleMerchantConnectionStatus {
   configured: boolean;
   connected: boolean;
@@ -544,7 +564,7 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-async function listConfiguredDataSourceProducts() {
+export async function listConfiguredDataSourceProducts() {
   const accountName = getMerchantAccountName();
   const dataSourceName = getMerchantDataSourceName();
   const matches: MerchantDeleteTarget[] = [];
@@ -579,6 +599,236 @@ async function listConfiguredDataSourceProducts() {
   } while (pageToken);
 
   return matches;
+}
+
+function createMerchantErrorCollector() {
+  const errors: MerchantSyncError[] = [];
+  let errorCount = 0;
+
+  return {
+    collect(error: MerchantSyncError) {
+      errorCount += 1;
+
+      if (errors.length < MERCHANT_ERROR_SAMPLE_LIMIT) {
+        errors.push(error);
+      }
+    },
+    get errorCount() {
+      return errorCount;
+    },
+    get errors() {
+      return errors;
+    },
+  };
+}
+
+async function emitMerchantWriteProgress(params: {
+  phase: "upserts" | "deletes";
+  completed: number;
+  total: number;
+  errorCount: number;
+  onProgress?: (
+    update: MerchantCatalogSyncProgress,
+  ) => Promise<void> | void;
+  force?: boolean;
+  lastCompleted: number;
+}) {
+  if (!params.onProgress) {
+    return;
+  }
+
+  if (
+    !params.force &&
+    params.completed !== params.total &&
+    params.completed - params.lastCompleted < 25
+  ) {
+    return;
+  }
+
+  const message =
+    params.phase === "upserts"
+      ? params.total === 0
+        ? "No Merchant Center upserts were needed for this run."
+        : `Uploading ${params.completed.toLocaleString()} of ${params.total.toLocaleString()} product updates to Merchant Center.`
+      : params.total === 0
+        ? "No Merchant Center deletes were needed for this run."
+        : `Sending ${params.completed.toLocaleString()} of ${params.total.toLocaleString()} Merchant delete calls.`;
+
+  await params.onProgress({
+    phase: params.phase,
+    completed: params.completed,
+    total: params.total,
+    errors: params.errorCount,
+    message: params.errorCount
+      ? `${message} ${params.errorCount.toLocaleString()} Merchant API error(s) seen so far.`
+      : message,
+  });
+}
+
+export async function upsertMerchantProductBatch(params: {
+  records: MerchantProductInputRecord[];
+  onProgress?: (
+    update: MerchantCatalogSyncProgress,
+  ) => Promise<void> | void;
+}) {
+  const accountName = getMerchantAccountName();
+  const dataSourceName = getMerchantDataSourceName();
+  const errorCollector = createMerchantErrorCollector();
+  let processed = 0;
+  let succeeded = 0;
+  let lastReported = -1;
+
+  await emitMerchantWriteProgress({
+    phase: "upserts",
+    completed: 0,
+    total: params.records.length,
+    errorCount: errorCollector.errorCount,
+    onProgress: params.onProgress,
+    force: true,
+    lastCompleted: lastReported,
+  });
+  lastReported = 0;
+
+  await runWithConcurrency(
+    params.records,
+    MERCHANT_WRITE_CONCURRENCY,
+    async (record) => {
+      try {
+        await merchantRequest(
+          `/products/v1/${accountName}/productInputs:insert`,
+          {
+            method: "POST",
+            query: {
+              dataSource: dataSourceName,
+            },
+            body: buildProductInputPayload(record),
+          },
+        );
+        succeeded += 1;
+      } catch (error) {
+        errorCollector.collect({
+          action: "insert",
+          offerId: record.offerId,
+          status: error instanceof MerchantApiError ? error.status : null,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unknown Merchant insert error.",
+        });
+      } finally {
+        processed += 1;
+        await emitMerchantWriteProgress({
+          phase: "upserts",
+          completed: processed,
+          total: params.records.length,
+          errorCount: errorCollector.errorCount,
+          onProgress: params.onProgress,
+          force: processed === params.records.length,
+          lastCompleted: lastReported,
+        });
+        if (
+          processed === params.records.length ||
+          processed - lastReported >= 25
+        ) {
+          lastReported = processed;
+        }
+      }
+    },
+  );
+
+  return {
+    attempted: params.records.length,
+    succeeded,
+    errorCount: errorCollector.errorCount,
+    errors: errorCollector.errors,
+  } satisfies MerchantWriteBatchSummary;
+}
+
+export async function deleteMerchantProductBatch(params: {
+  targets: MerchantDeleteTarget[];
+  onProgress?: (
+    update: MerchantCatalogSyncProgress,
+  ) => Promise<void> | void;
+}) {
+  const dataSourceName = getMerchantDataSourceName();
+  const errorCollector = createMerchantErrorCollector();
+  const deleteTargetKeysSucceeded: string[] = [];
+  let processed = 0;
+  let succeeded = 0;
+  let lastReported = -1;
+
+  await emitMerchantWriteProgress({
+    phase: "deletes",
+    completed: 0,
+    total: params.targets.length,
+    errorCount: errorCollector.errorCount,
+    onProgress: params.onProgress,
+    force: true,
+    lastCompleted: lastReported,
+  });
+  lastReported = 0;
+
+  await runWithConcurrency(
+    params.targets,
+    MERCHANT_WRITE_CONCURRENCY,
+    async (target) => {
+      try {
+        await merchantRequest(
+          `/products/v1/${buildProductInputName(target)}`,
+          {
+            method: "DELETE",
+            query: {
+              dataSource: dataSourceName,
+            },
+          },
+        );
+        succeeded += 1;
+        deleteTargetKeysSucceeded.push(buildDeleteKey(target));
+      } catch (error) {
+        if (error instanceof MerchantApiError && error.status === 404) {
+          succeeded += 1;
+          deleteTargetKeysSucceeded.push(buildDeleteKey(target));
+          return;
+        }
+
+        errorCollector.collect({
+          action: "delete",
+          offerId: target.offerId,
+          status: error instanceof MerchantApiError ? error.status : null,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unknown Merchant delete error.",
+        });
+      } finally {
+        processed += 1;
+        await emitMerchantWriteProgress({
+          phase: "deletes",
+          completed: processed,
+          total: params.targets.length,
+          errorCount: errorCollector.errorCount,
+          onProgress: params.onProgress,
+          force: processed === params.targets.length,
+          lastCompleted: lastReported,
+        });
+        if (
+          processed === params.targets.length ||
+          processed - lastReported >= 25
+        ) {
+          lastReported = processed;
+        }
+      }
+    },
+  );
+
+  return {
+    attempted: params.targets.length,
+    succeeded,
+    errorCount: errorCollector.errorCount,
+    errors: errorCollector.errors,
+    deleteTargetKeysSucceeded,
+    deleteTargetsSample: params.targets.slice(0, MERCHANT_DELETE_SAMPLE_LIMIT),
+  } satisfies MerchantDeleteBatchSummary;
 }
 
 export async function getGoogleMerchantConnectionStatus(): Promise<GoogleMerchantConnectionStatus> {
@@ -647,6 +897,9 @@ export async function syncMerchantCatalog(params: {
   upserts: MerchantProductInputRecord[];
   deletes: MerchantDeleteTarget[];
   reconcileWithExistingProducts?: boolean;
+  onProgress?: (
+    update: MerchantCatalogSyncProgress,
+  ) => Promise<void> | void;
 }) {
   const authMode = getGoogleAuthMode();
 
@@ -672,8 +925,28 @@ export async function syncMerchantCatalog(params: {
 
   let existingProductsScanned = 0;
   let reconciliationDeletes = 0;
+  const errors: MerchantSyncError[] = [];
+  let errorCount = 0;
+  const deleteTargetKeysSucceeded: string[] = [];
+
+  const emitProgress = async (update: MerchantCatalogSyncProgress) => {
+    if (!params.onProgress) {
+      return;
+    }
+
+    await params.onProgress(update);
+  };
 
   if (params.reconcileWithExistingProducts) {
+    await emitProgress({
+      phase: "reconciling",
+      completed: 0,
+      total: null,
+      errors: errorCount,
+      message:
+        "Checking existing Merchant Center products so rows missing from the current Shopify feed can be deleted during this full sync.",
+    });
+
     const existingProducts = await listConfiguredDataSourceProducts();
     existingProductsScanned = existingProducts.length;
 
@@ -694,99 +967,33 @@ export async function syncMerchantCatalog(params: {
   const deletes = Array.from(deleteMap.entries())
     .filter(([key]) => !upsertMap.has(key))
     .map(([, value]) => value);
-  const errors: MerchantSyncError[] = [];
-  let errorCount = 0;
-  let upsertsSucceeded = 0;
-  let deletesSucceeded = 0;
-  const deleteTargetKeysSucceeded: string[] = [];
 
-  const collectError = (error: MerchantSyncError) => {
-    errorCount += 1;
+  const upsertSummary = await upsertMerchantProductBatch({
+    records: upserts,
+    onProgress: emitProgress,
+  });
+  const deleteSummary = await deleteMerchantProductBatch({
+    targets: deletes,
+    onProgress: emitProgress,
+  });
 
-    if (errors.length < MERCHANT_ERROR_SAMPLE_LIMIT) {
-      errors.push(error);
-    }
-  };
-
-  await runWithConcurrency(
-    upserts,
-    MERCHANT_WRITE_CONCURRENCY,
-    async (record) => {
-      try {
-        await merchantRequest(
-          `/products/v1/${accountName}/productInputs:insert`,
-          {
-            method: "POST",
-            query: {
-              dataSource: dataSourceName,
-            },
-            body: buildProductInputPayload(record),
-          },
-        );
-        upsertsSucceeded += 1;
-      } catch (error) {
-        collectError({
-          action: "insert",
-          offerId: record.offerId,
-          status: error instanceof MerchantApiError ? error.status : null,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unknown Merchant insert error.",
-        });
-      }
-    },
-  );
-
-  await runWithConcurrency(
-    deletes,
-    MERCHANT_WRITE_CONCURRENCY,
-    async (target) => {
-      try {
-        await merchantRequest(
-          `/products/v1/${buildProductInputName(target)}`,
-          {
-            method: "DELETE",
-            query: {
-              dataSource: dataSourceName,
-            },
-          },
-        );
-        deletesSucceeded += 1;
-        deleteTargetKeysSucceeded.push(buildDeleteKey(target));
-      } catch (error) {
-        if (error instanceof MerchantApiError && error.status === 404) {
-          deletesSucceeded += 1;
-          deleteTargetKeysSucceeded.push(buildDeleteKey(target));
-          return;
-        }
-
-        collectError({
-          action: "delete",
-          offerId: target.offerId,
-          status: error instanceof MerchantApiError ? error.status : null,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unknown Merchant delete error.",
-        });
-      }
-    },
-  );
+  errors.push(...upsertSummary.errors, ...deleteSummary.errors);
+  errorCount = upsertSummary.errorCount + deleteSummary.errorCount;
+  deleteTargetKeysSucceeded.push(...deleteSummary.deleteTargetKeysSucceeded);
 
   return {
     accountName,
     dataSourceName,
     authMode,
     upsertsAttempted: upserts.length,
-    upsertsSucceeded,
+    upsertsSucceeded: upsertSummary.succeeded,
     deletesAttempted: deletes.length,
-    deletesSucceeded,
+    deletesSucceeded: deleteSummary.succeeded,
     reconciliationDeletes,
     existingProductsScanned,
     errorCount,
     errors,
-    deleteTargetsSample: deletes.slice(0, MERCHANT_DELETE_SAMPLE_LIMIT),
+    deleteTargetsSample: deleteSummary.deleteTargetsSample,
     deleteTargetKeysSucceeded,
   } satisfies MerchantCatalogSyncSummary;
 }

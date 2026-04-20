@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { isAuthorizedCronRequest } from "@/lib/env";
+import { startLiveSyncJob } from "@/lib/live-sync-jobs";
 import { getSyncSettings } from "@/lib/operator-store";
-import { decideSyncMode, runSync } from "@/lib/sync";
+import { decideSyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,21 +32,32 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const result = await runSync(decision.mode, {
+  const startResult = await startLiveSyncJob({
+    mode: decision.mode,
     trigger: "cron",
     purpose: "sync",
-    dryRun: false,
     settings,
-    prepareExportArtifact: true,
   });
 
-  return NextResponse.json(
-    {
-      ok: result.ok,
-      skipped: false,
-      decision,
-      result,
-    },
-    { status: result.ok ? 200 : 500 },
-  );
+  if (!startResult.ok) {
+    return NextResponse.json(
+      {
+        ok: true,
+        skipped: true,
+        decision,
+        message:
+          "A live sync workflow is already running, so the scheduled cron kickoff was skipped.",
+        activeRun: startResult.activeRun,
+      },
+      { status: 200 },
+    );
+  }
+
+  return NextResponse.json({
+    ok: true,
+    skipped: false,
+    decision,
+    runId: startResult.runId,
+    queued: true,
+  });
 }
