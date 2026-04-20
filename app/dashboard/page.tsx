@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PreviewPanel } from "@/app/dashboard/preview-panel";
+import { FirstFullSyncButton } from "@/app/dashboard/first-full-sync-button";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
   getOperatorStoreStatus,
@@ -128,6 +129,7 @@ function getSavedMessage(saved: string | undefined) {
 }
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 export default async function DashboardPage(props: DashboardPageProps) {
   await requireOperatorAuthentication();
@@ -284,14 +286,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 This action disappears forever after the first successful live
                 full sync.
               </p>
-              <form action={runFirstFullSyncAction} className="mt-4">
-                <button
-                  type="submit"
-                  className="rounded-full bg-[#1f1711] px-5 py-3 text-sm font-semibold text-[#f9f2e7] transition-transform hover:-translate-y-0.5"
-                >
-                  Run first full sync now
-                </button>
-              </form>
+              <FirstFullSyncButton action={runFirstFullSyncAction} />
             </div>
           ) : null}
         </article>
