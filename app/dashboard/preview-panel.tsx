@@ -265,6 +265,13 @@ export function PreviewPanel(props: {
         </div>
       </div>
 
+      <p className="mt-3 text-sm leading-7 text-muted">
+        Preview is exploratory. When no successful live sync baseline exists
+        yet, delta preview can fall back to recent Shopify changes. Use
+        <strong> Test save</strong> when you need a dry run that matches the
+        exact production delta/full scope.
+      </p>
+
       <div className="mt-3">
         <div className="h-3 overflow-hidden rounded-full border border-line bg-white/60">
           <div

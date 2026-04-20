@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { parseShopifyOfferId } from "@/lib/shopify-offer-id";
 import type {
   ExcludedPreviewSample,
   FeedPreviewRecord,
@@ -132,12 +133,7 @@ function readCustomAttribute(record: FeedPreviewRecord, name: string) {
 }
 
 function parseOfferId(offerId: string) {
-  const match = offerId.match(/^shopify_ZZ_(.+)_(.+)$/);
-
-  return {
-    productId: match?.[1] ?? "",
-    variantId: match?.[2] ?? "",
-  };
+  return parseShopifyOfferId(offerId);
 }
 
 function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {

@@ -92,6 +92,7 @@ export async function GET(request: NextRequest) {
               settings,
               exhaustive,
               prepareExportArtifact: exhaustive,
+              allowDeltaFallback: true,
               onProgress: sendProgress,
             }),
         );

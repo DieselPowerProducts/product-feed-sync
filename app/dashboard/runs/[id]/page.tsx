@@ -47,6 +47,7 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
   const artifact = await readRunArtifact<SyncRunArtifact>(id);
   const validationIssues = artifact?.stats.validationIssues ?? 0;
   const validationSample = artifact?.validationSample ?? [];
+  const deleteSample = artifact?.deleteSample ?? [];
 
   if (!artifact) {
     notFound();
@@ -77,7 +78,7 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
           </Link>
         </div>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-6">
+        <div className="mt-8 grid gap-4 md:grid-cols-7">
           <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
             <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
               Started
@@ -126,6 +127,14 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
             </p>
             <p className="mt-3 text-lg font-semibold text-foreground">
               {artifact.excludedSample.length}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Delete sample
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {deleteSample.length}
             </p>
           </div>
           <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
@@ -389,6 +398,84 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
         ) : (
           <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
             No excluded sample rows were stored for this run.
+          </div>
+        )}
+      </section>
+
+      <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
+              Delete Sample
+            </p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
+              Products queued for Merchant delete calls
+            </h2>
+          </div>
+          <p className="text-sm text-muted">
+            Up to 250 delete rows are saved per run.
+          </p>
+        </div>
+
+        {deleteSample.length ? (
+          <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
+                  <tr>
+                    <th className="px-4 py-3">Source</th>
+                    <th className="px-4 py-3">Reason</th>
+                    <th className="px-4 py-3">Product</th>
+                    <th className="px-4 py-3">Variant</th>
+                    <th className="px-4 py-3">Offer</th>
+                    <th className="px-4 py-3">SKU</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deleteSample.map((row, index) => (
+                    <tr
+                      key={`${row.source}-${row.reason}-${row.offerId ?? row.productId}-${index}`}
+                      className="border-b border-line/70 align-top last:border-b-0"
+                    >
+                      <td className="px-4 py-4 text-muted">{row.source}</td>
+                      <td className="px-4 py-4 font-semibold text-accent-strong">
+                        {row.reason}
+                      </td>
+                      <td className="px-4 py-4 text-muted">
+                        <p>{row.title}</p>
+                        <p className="mt-2 font-mono text-xs uppercase tracking-[0.16em]">
+                          {row.productId}
+                        </p>
+                        {row.link ? (
+                          <a
+                            href={row.link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-flex text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong"
+                          >
+                            Open product
+                          </a>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4 text-muted">
+                        {row.variantTitle ?? "-"}
+                        {row.variantId ? (
+                          <p className="mt-2 font-mono text-xs uppercase tracking-[0.16em]">
+                            {row.variantId}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4 text-muted">{row.offerId ?? "-"}</td>
+                      <td className="px-4 py-4 text-muted">{row.sku ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
+            No delete rows were stored for this run.
           </div>
         )}
       </section>

@@ -7,14 +7,18 @@ import {
 import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
+  getPendingShopifyDeletes,
   getLatestSuccessfulLiveSyncHistory,
+  removePendingShopifyDeletes,
   getSyncSettings,
   writePreviewExportArtifact,
   writeRunArtifact,
+  type PendingShopifyDeleteRecord,
   type SyncHistoryPurpose,
   type SyncHistoryEntry,
   type SyncSettings,
 } from "@/lib/operator-store";
+import { buildShopifyOfferId, parseShopifyOfferId } from "@/lib/shopify-offer-id";
 import {
   fetchShopConnectionDetails,
   getConfiguredShopDomain,
@@ -470,6 +474,13 @@ export interface ExcludedPreviewSample {
   link?: string | null;
 }
 
+export interface DeletePreviewSample extends ExcludedPreviewSample {
+  source:
+    | "shopify_scan"
+    | "shopify_webhook"
+    | "merchant_reconciliation";
+}
+
 interface SyncSearchPlan {
   query: string;
   lookbackStart: string | null;
@@ -496,6 +507,7 @@ export interface SyncRunArtifact {
   includedSample: FeedPreviewRecord[];
   validationSample: ExcludedPreviewSample[];
   excludedSample: ExcludedPreviewSample[];
+  deleteSample?: DeletePreviewSample[];
   merchant?: SyncRunResult["merchant"];
 }
 
@@ -535,6 +547,7 @@ export interface SyncRunResult {
   exclusions: Record<string, number>;
   preview: FeedPreviewRecord[];
   exportArtifactId?: string | null;
+  deleteSample?: DeletePreviewSample[];
   merchant?: MerchantCatalogSyncSummary | null;
 }
 
@@ -767,9 +780,9 @@ function incrementCounter(counter: Record<string, number>, key: string) {
   counter[key] = (counter[key] ?? 0) + 1;
 }
 
-function collectExcludedSample(
-  samples: ExcludedPreviewSample[],
-  sample: ExcludedPreviewSample,
+function collectExcludedSample<T extends ExcludedPreviewSample>(
+  samples: T[],
+  sample: T,
   limit = RUN_ARTIFACT_EXCLUDED_SAMPLE_LIMIT,
 ) {
   if (samples.length >= limit) {
@@ -1466,7 +1479,7 @@ function buildDeleteTarget(params: {
   );
 
   return {
-    offerId: `shopify_ZZ_${productId}_${variantId}`,
+    offerId: buildShopifyOfferId(productId, variantId),
     contentLanguage: env.googleContentLanguage || "en",
     feedLabel: env.googleFeedLabel || "US",
     reason: params.reason,
@@ -1474,6 +1487,62 @@ function buildDeleteTarget(params: {
     variantId,
     title: params.product.title,
     variantTitle: params.variant.title,
+  };
+}
+
+function buildDeleteTargetKey(
+  target: Pick<MerchantDeleteTarget, "contentLanguage" | "feedLabel" | "offerId">,
+) {
+  return `${target.contentLanguage}~${target.feedLabel}~${target.offerId}`;
+}
+
+function toDeletePreviewSample(
+  target: MerchantDeleteTarget,
+  source: DeletePreviewSample["source"],
+): DeletePreviewSample {
+  const parsedIds = parseShopifyOfferId(target.offerId);
+
+  return {
+    reason: target.reason ?? "merchant_delete",
+    productId: target.productId ?? parsedIds.productId,
+    variantId: target.variantId ?? (parsedIds.variantId || null),
+    offerId: target.offerId,
+    handle: "",
+    title: target.title ?? target.offerId,
+    variantTitle: target.variantTitle ?? null,
+    sku: null,
+    link: null,
+    source,
+  };
+}
+
+function toPendingDeleteTarget(record: PendingShopifyDeleteRecord): MerchantDeleteTarget {
+  return {
+    offerId: record.offerId,
+    contentLanguage: record.contentLanguage,
+    feedLabel: record.feedLabel,
+    reason: record.reason,
+    productId: record.productId,
+    variantId: record.variantId,
+    title: record.title,
+    variantTitle: record.variantTitle,
+  };
+}
+
+function toPendingDeletePreviewSample(
+  record: PendingShopifyDeleteRecord,
+): DeletePreviewSample {
+  return {
+    reason: record.reason,
+    productId: record.productId,
+    variantId: record.variantId,
+    offerId: record.offerId,
+    handle: record.handle,
+    title: record.title,
+    variantTitle: record.variantTitle,
+    sku: record.sku,
+    link: record.link ?? null,
+    source: "shopify_webhook",
   };
 }
 
@@ -1506,6 +1575,7 @@ async function buildSearchQuery(
   options?: {
     dryRun: boolean;
     now?: Date;
+    allowDeltaFallback?: boolean;
   },
 ): Promise<SyncSearchPlan> {
   const now = options?.now ?? new Date();
@@ -1539,9 +1609,9 @@ async function buildSearchQuery(
     };
   }
 
-  if (!options?.dryRun) {
+  if (!options?.allowDeltaFallback) {
     throw new Error(
-      "Live delta sync requires a successful live sync baseline. Run a live full sync first so Merchant Center has a complete catalog before deltas start.",
+      "Production-accurate delta requires a successful live sync baseline. Run a live full sync first so Merchant Center has a complete catalog before deltas start.",
     );
   }
 
@@ -1706,7 +1776,7 @@ function buildPreviewRecord(params: {
     variant.inventoryItem?.unitCost?.currencyCode ?? currencyCode,
   );
   const record = {
-    offerId: `shopify_ZZ_${productId}_${variantId}`,
+    offerId: buildShopifyOfferId(productId, variantId),
     contentLanguage: env.googleContentLanguage || "en",
     feedLabel: env.googleFeedLabel || "US",
     customAttributes: [
@@ -1833,11 +1903,13 @@ async function buildDryRunPreview(params: {
   effectiveNow?: Date;
   collectAllRecords?: boolean;
   captureDeleteCandidates?: boolean;
+  allowDeltaFallback?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
   const search = await buildSearchQuery(params.mode, params.settings, {
     dryRun: params.dryRun,
     now: params.effectiveNow,
+    allowDeltaFallback: params.allowDeltaFallback,
   });
   const createProgressMessage = (
     stage: "counting" | "scanning",
@@ -1905,6 +1977,7 @@ async function buildDryRunPreview(params: {
   const allValidationRows: ExcludedPreviewSample[] = [];
   const validationSamples: ExcludedPreviewSample[] = [];
   const excludedSamples: ExcludedPreviewSample[] = [];
+  const deleteSamples: DeletePreviewSample[] = [];
   const deleteCandidates: MerchantDeleteTarget[] = [];
   const exclusions: Record<string, number> = {};
   let totalProducts: number | null = null;
@@ -2128,6 +2201,10 @@ async function buildDryRunPreview(params: {
             }
             if (params.captureDeleteCandidates) {
               deleteCandidates.push(deleteTarget);
+              collectExcludedSample(deleteSamples, {
+                ...excludedRow,
+                source: "shopify_scan",
+              } satisfies DeletePreviewSample);
             }
           }
 
@@ -2158,7 +2235,10 @@ async function buildDryRunPreview(params: {
               details: record.details,
               productId: productId,
               variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
-              offerId: `shopify_ZZ_${productId}_${resolveLegacyId(variant.legacyResourceId, variant.id)}`,
+              offerId: buildShopifyOfferId(
+                productId,
+                resolveLegacyId(variant.legacyResourceId, variant.id),
+              ),
               handle: product.handle,
               title: product.title,
               variantTitle: variant.title,
@@ -2177,13 +2257,16 @@ async function buildDryRunPreview(params: {
               }
             }
             if (params.captureDeleteCandidates) {
-              deleteCandidates.push(
-                buildDeleteTarget({
-                  product,
-                  variant,
-                  reason: record.excluded,
-                }),
-              );
+              const deleteTarget = buildDeleteTarget({
+                product,
+                variant,
+                reason: record.excluded,
+              });
+              deleteCandidates.push(deleteTarget);
+              collectExcludedSample(deleteSamples, {
+                ...excludedRow,
+                source: "shopify_scan",
+              } satisfies DeletePreviewSample);
             }
             continue;
           }
@@ -2259,6 +2342,7 @@ async function buildDryRunPreview(params: {
     allExcludedRows,
     allValidationRows,
     deleteCandidates,
+    deleteSamples,
     preview: preview.slice(0, params.previewLimit),
     includedSamples: preview.slice(0, params.artifactSampleLimit),
     validationSamples,
@@ -2360,10 +2444,12 @@ function getDaysUntilNextRun(
   anchorDate: Date,
   intervalDays: number,
 ) {
-  const daysSinceAnchor = Math.max(
-    0,
-    toUtcDayNumber(now) - toUtcDayNumber(anchorDate),
-  );
+  const daysSinceAnchor = toUtcDayNumber(now) - toUtcDayNumber(anchorDate);
+
+  if (daysSinceAnchor < 0) {
+    return Math.abs(daysSinceAnchor);
+  }
+
   const remainder = daysSinceAnchor % intervalDays;
 
   return remainder === 0 ? 0 : intervalDays - remainder;
@@ -2403,10 +2489,16 @@ export function decideSyncMode(
   settings: SyncSettings = getDefaultSyncSettings(),
 ): SyncDecision {
   const anchorDate = parseAnchorDate(settings.anchorDate);
-  const daysSinceAnchor = Math.max(
-    0,
-    toUtcDayNumber(now) - toUtcDayNumber(anchorDate),
-  );
+  const daysSinceAnchor = toUtcDayNumber(now) - toUtcDayNumber(anchorDate);
+
+  if (daysSinceAnchor < 0) {
+    return {
+      mode: "idle",
+      anchorDate: anchorDate.toISOString().slice(0, 10),
+      daysSinceAnchor,
+      reason: `Scheduled syncs will begin on the anchor date ${anchorDate.toISOString().slice(0, 10)}.`,
+    };
+  }
 
   if (daysSinceAnchor % settings.fullIntervalDays === 0) {
     return {
@@ -2494,6 +2586,7 @@ export async function runSync(
     exhaustive?: boolean;
     prepareExportArtifact?: boolean;
     effectiveNow?: Date;
+    allowDeltaFallback?: boolean;
     onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
   },
 ): Promise<SyncRunResult> {
@@ -2530,20 +2623,80 @@ export async function runSync(
       dryRun,
       effectiveNow: options.effectiveNow,
       collectAllRecords: options.prepareExportArtifact || !dryRun,
-      captureDeleteCandidates: !dryRun,
+      captureDeleteCandidates:
+        !dryRun || purpose === "test-save" || (options.persistHistory ?? true),
+      allowDeltaFallback: options.allowDeltaFallback,
       onProgress: options.onProgress,
     });
     const excluded = Object.values(previewRun.exclusions).reduce(
       (sum, count) => sum + count,
       0,
     );
+    const pendingHardDeleteRecords = await getPendingShopifyDeletes();
+    const pendingHardDeleteTargets = pendingHardDeleteRecords.map(
+      toPendingDeleteTarget,
+    );
+    const pendingHardDeleteSamples = pendingHardDeleteRecords.map(
+      toPendingDeletePreviewSample,
+    );
+    const deleteSampleLookup = new Map<string, DeletePreviewSample>();
+
+    previewRun.deleteCandidates.forEach((target, index) => {
+      deleteSampleLookup.set(
+        buildDeleteTargetKey(target),
+        previewRun.deleteSamples[index] ?? toDeletePreviewSample(target, "shopify_scan"),
+      );
+    });
+
+    pendingHardDeleteTargets.forEach((target, index) => {
+      deleteSampleLookup.set(
+        buildDeleteTargetKey(target),
+        pendingHardDeleteSamples[index] ??
+          toDeletePreviewSample(target, "shopify_webhook"),
+      );
+    });
+
+    const combinedDeleteTargets = [
+      ...previewRun.deleteCandidates,
+      ...pendingHardDeleteTargets,
+    ];
     const merchant = dryRun
       ? null
       : await syncMerchantCatalog({
           upserts: previewRun.allRecords,
-          deletes: previewRun.deleteCandidates,
+          deletes: combinedDeleteTargets,
           reconcileWithExistingProducts: mode === "full",
         });
+    const deleteSample = merchant
+      ? merchant.deleteTargetsSample
+          .map((target) => {
+            const key = buildDeleteTargetKey(target);
+            const existing = deleteSampleLookup.get(key);
+
+            if (existing) {
+              return existing;
+            }
+
+            return toDeletePreviewSample(
+              target,
+              target.reason === "missing_from_full_catalog_reconciliation"
+                ? "merchant_reconciliation"
+                : "shopify_scan",
+            );
+          })
+          .slice(0, RUN_ARTIFACT_EXCLUDED_SAMPLE_LIMIT)
+      : Array.from(deleteSampleLookup.values()).slice(
+          0,
+          RUN_ARTIFACT_EXCLUDED_SAMPLE_LIMIT,
+        );
+
+    if (merchant?.deleteTargetKeysSucceeded.length) {
+      await removePendingShopifyDeletes(
+        pendingHardDeleteTargets.filter((target) =>
+          merchant.deleteTargetKeysSucceeded.includes(buildDeleteTargetKey(target)),
+        ),
+      );
+    }
     const notes = buildSyncNotes({
       dryRun,
       exhaustive,
@@ -2554,6 +2707,11 @@ export async function runSync(
       merchant,
       testSavePurpose: purpose === "test-save",
     });
+    if (pendingHardDeleteTargets.length) {
+      notes.unshift(
+        `${pendingHardDeleteTargets.length} hard-deleted Shopify variant(s) were queued from webhook events and included in this run's Merchant delete scope.`,
+      );
+    }
     if (options.effectiveNow) {
       notes.unshift(
         `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
@@ -2596,6 +2754,7 @@ export async function runSync(
       exclusions: previewRun.exclusions,
       preview: previewRun.preview,
       exportArtifactId,
+      deleteSample,
       merchant,
     } satisfies SyncRunResult;
 
@@ -2639,6 +2798,7 @@ export async function runSync(
         includedSample: previewRun.includedSamples,
         validationSample: previewRun.validationSamples,
         excludedSample: previewRun.excludedSamples,
+        deleteSample: result.deleteSample ?? [],
         merchant: result.merchant ?? null,
       };
 
@@ -2653,6 +2813,7 @@ export async function runSync(
     const search = await buildSearchQuery(mode, settings, {
       dryRun,
       now: options.effectiveNow,
+      allowDeltaFallback: options.allowDeltaFallback,
     }).catch(() => ({
       query: mode === "full" ? "" : "",
       lookbackStart: null,
@@ -2725,6 +2886,7 @@ export async function runSync(
         includedSample: [],
         validationSample: [],
         excludedSample: [],
+        deleteSample: [],
       };
 
       await writeRunArtifact(artifactId, artifact);
@@ -2755,6 +2917,7 @@ export async function runSyncExport(
     exhaustive,
     dryRun,
     collectAllRecords: true,
+    allowDeltaFallback: true,
   });
   const excluded = Object.values(previewRun.exclusions).reduce(
     (sum, count) => sum + count,

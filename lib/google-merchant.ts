@@ -7,6 +7,7 @@ const MERCHANT_API_BASE_URL = "https://merchantapi.googleapis.com";
 const MERCHANT_LIST_PAGE_SIZE = 1000;
 const MERCHANT_WRITE_CONCURRENCY = 24;
 const MERCHANT_ERROR_SAMPLE_LIMIT = 50;
+const MERCHANT_DELETE_SAMPLE_LIMIT = 250;
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -133,6 +134,8 @@ export interface MerchantCatalogSyncSummary {
   existingProductsScanned: number;
   errorCount: number;
   errors: MerchantSyncError[];
+  deleteTargetsSample: MerchantDeleteTarget[];
+  deleteTargetKeysSucceeded: string[];
 }
 
 export interface GoogleMerchantConnectionStatus {
@@ -695,6 +698,7 @@ export async function syncMerchantCatalog(params: {
   let errorCount = 0;
   let upsertsSucceeded = 0;
   let deletesSucceeded = 0;
+  const deleteTargetKeysSucceeded: string[] = [];
 
   const collectError = (error: MerchantSyncError) => {
     errorCount += 1;
@@ -749,9 +753,11 @@ export async function syncMerchantCatalog(params: {
           },
         );
         deletesSucceeded += 1;
+        deleteTargetKeysSucceeded.push(buildDeleteKey(target));
       } catch (error) {
         if (error instanceof MerchantApiError && error.status === 404) {
           deletesSucceeded += 1;
+          deleteTargetKeysSucceeded.push(buildDeleteKey(target));
           return;
         }
 
@@ -780,5 +786,7 @@ export async function syncMerchantCatalog(params: {
     existingProductsScanned,
     errorCount,
     errors,
+    deleteTargetsSample: deletes.slice(0, MERCHANT_DELETE_SAMPLE_LIMIT),
+    deleteTargetKeysSucceeded,
   } satisfies MerchantCatalogSyncSummary;
 }

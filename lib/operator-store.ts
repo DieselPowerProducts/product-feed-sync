@@ -23,6 +23,7 @@ const LOCAL_PREVIEW_EXPORT_DIR = path.join(
 );
 const HISTORY_LIMIT = 50;
 const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE = 2;
+const PENDING_DELETE_LIMIT = 5000;
 
 export type SyncHistoryPurpose = "sync" | "test-save";
 
@@ -62,9 +63,28 @@ export interface SyncHistoryEntry {
   };
 }
 
+export interface PendingShopifyDeleteRecord {
+  offerId: string;
+  contentLanguage: string;
+  feedLabel: string;
+  reason: string;
+  productId: string;
+  variantId: string;
+  title: string;
+  variantTitle: string | null;
+  handle: string;
+  sku: string | null;
+  link?: string | null;
+  queuedAt: string;
+  source: "shopify_webhook";
+  webhookId?: string | null;
+  shopDomain?: string | null;
+}
+
 interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
+  pendingDeletes: PendingShopifyDeleteRecord[];
 }
 
 type StorageMode = "blob" | "local" | "memory";
@@ -91,6 +111,7 @@ function defaultState(): OperatorState {
   return {
     settings: defaultSettings(),
     history: [],
+    pendingDeletes: [],
   };
 }
 
@@ -133,7 +154,34 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
           },
         }))
       : [],
+    pendingDeletes: Array.isArray(input?.pendingDeletes)
+      ? input.pendingDeletes
+          .slice(0, PENDING_DELETE_LIMIT)
+          .map((entry) => ({
+            offerId: entry.offerId,
+            contentLanguage: entry.contentLanguage,
+            feedLabel: entry.feedLabel,
+            reason: entry.reason ?? "shopify_hard_delete",
+            productId: entry.productId,
+            variantId: entry.variantId,
+            title: entry.title ?? "",
+            variantTitle: entry.variantTitle ?? null,
+            handle: entry.handle ?? "",
+            sku: entry.sku ?? null,
+            link: entry.link ?? null,
+            queuedAt: entry.queuedAt ?? new Date().toISOString(),
+            source: "shopify_webhook",
+            webhookId: entry.webhookId ?? null,
+            shopDomain: entry.shopDomain ?? null,
+          }))
+      : [],
   } satisfies OperatorState;
+}
+
+function buildPendingDeleteKey(
+  target: Pick<PendingShopifyDeleteRecord, "contentLanguage" | "feedLabel" | "offerId">,
+) {
+  return `${target.contentLanguage}~${target.feedLabel}~${target.offerId}`;
 }
 
 function getRunArtifactBlobPath(id: string) {
@@ -350,6 +398,73 @@ export async function getSyncHistory(limit = 20) {
   return [...state.history]
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
     .slice(0, limit);
+}
+
+export async function getPendingShopifyDeletes() {
+  const state = await readState();
+
+  return [...state.pendingDeletes].sort((left, right) =>
+    left.queuedAt.localeCompare(right.queuedAt),
+  );
+}
+
+export async function appendPendingShopifyDeletes(
+  entries: PendingShopifyDeleteRecord[],
+) {
+  if (!entries.length) {
+    return [];
+  }
+
+  const state = await readState();
+  const pendingByKey = new Map(
+    state.pendingDeletes.map((entry) => [buildPendingDeleteKey(entry), entry]),
+  );
+
+  for (const entry of entries) {
+    pendingByKey.set(buildPendingDeleteKey(entry), entry);
+  }
+
+  const pendingDeletes = Array.from(pendingByKey.values())
+    .sort((left, right) => right.queuedAt.localeCompare(left.queuedAt))
+    .slice(0, PENDING_DELETE_LIMIT);
+
+  await writeState({
+    ...state,
+    pendingDeletes,
+  });
+
+  return pendingDeletes;
+}
+
+export async function removePendingShopifyDeletes(
+  targets: Array<
+    Pick<PendingShopifyDeleteRecord, "contentLanguage" | "feedLabel" | "offerId">
+  >,
+) {
+  if (!targets.length) {
+    return [];
+  }
+
+  const state = await readState();
+  const keysToRemove = new Set(targets.map((target) => buildPendingDeleteKey(target)));
+  const removed: PendingShopifyDeleteRecord[] = [];
+  const pendingDeletes = state.pendingDeletes.filter((entry) => {
+    if (!keysToRemove.has(buildPendingDeleteKey(entry))) {
+      return true;
+    }
+
+    removed.push(entry);
+    return false;
+  });
+
+  if (removed.length) {
+    await writeState({
+      ...state,
+      pendingDeletes,
+    });
+  }
+
+  return removed;
 }
 
 export async function getLatestSuccessfulLiveSyncHistory() {

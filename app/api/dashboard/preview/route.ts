@@ -80,6 +80,7 @@ export async function GET(request: NextRequest) {
       prepareExportArtifact: readBooleanish(
         request.nextUrl.searchParams.get("exhaustive"),
       ),
+      allowDeltaFallback: true,
     }),
   );
 

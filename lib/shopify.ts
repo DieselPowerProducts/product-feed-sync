@@ -40,6 +40,30 @@ interface ShopifyGraphqlResponse<T> {
   };
 }
 
+interface ShopifyWebhookSubscriptionNode {
+  id: string;
+  topic: string;
+  uri: string | null;
+}
+
+interface ShopifyWebhookSubscriptionsPayload {
+  webhookSubscriptions?: {
+    edges?: Array<{
+      node?: ShopifyWebhookSubscriptionNode | null;
+    }>;
+  } | null;
+}
+
+interface ShopifyWebhookSubscriptionCreatePayload {
+  webhookSubscriptionCreate?: {
+    webhookSubscription?: ShopifyWebhookSubscriptionNode | null;
+    userErrors?: Array<{
+      field?: string[] | null;
+      message: string;
+    }> | null;
+  } | null;
+}
+
 export interface ShopifyRuntimeToken {
   accessToken: string;
   source: "env" | "client_credentials";
@@ -189,6 +213,10 @@ export function getShopifyAuthStartUrl(request?: NextRequest) {
   return `${getAppOrigin(request)}/api/shopify/install`;
 }
 
+export function getShopifyProductsDeleteWebhookUrl(request?: NextRequest) {
+  return `${getAppOrigin(request)}/api/shopify/webhooks/products-delete`;
+}
+
 export function getShopifyScopes() {
   return env.shopifyScopes
     .split(",")
@@ -211,6 +239,128 @@ export function getShopifyConfigurationStatus() {
     storeDomain: shop,
     callbackUrl: getShopifyCallbackUrl(),
     installUrl: getShopifyAuthStartUrl(),
+    productsDeleteWebhookUrl: getShopifyProductsDeleteWebhookUrl(),
+  };
+}
+
+export function isValidShopifyWebhookRequest(rawBody: string, hmacHeader: string | null) {
+  if (!hmacHeader || !hasEnvValue(env.shopifyClientSecret)) {
+    return false;
+  }
+
+  const expectedHmac = crypto
+    .createHmac("sha256", env.shopifyClientSecret)
+    .update(rawBody, "utf8")
+    .digest("base64");
+
+  if (expectedHmac.length !== hmacHeader.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedHmac, "utf8"),
+    Buffer.from(hmacHeader, "utf8"),
+  );
+}
+
+function connectionNodes<T>(connection: {
+  edges?: Array<{
+    node?: T | null;
+  }>;
+} | null | undefined) {
+  return (
+    connection?.edges?.flatMap((edge) => (edge.node ? [edge.node] : [])) ?? []
+  );
+}
+
+export async function getShopifyProductsDeleteWebhookStatus() {
+  const uri = getShopifyProductsDeleteWebhookUrl();
+  const payload = await runShopifyAdminGraphql<ShopifyWebhookSubscriptionsPayload>({
+    query: `
+      query ProductDeleteWebhookSubscriptions {
+        webhookSubscriptions(first: 25, topics: PRODUCTS_DELETE) {
+          edges {
+            node {
+              id
+              topic
+              uri
+            }
+          }
+        }
+      }
+    `,
+  });
+  const subscriptions = connectionNodes(payload.webhookSubscriptions);
+  const matchingSubscription =
+    subscriptions.find((subscription) => subscription.uri === uri) ?? null;
+
+  return {
+    uri,
+    registered: Boolean(matchingSubscription),
+    subscriptionId: matchingSubscription?.id ?? null,
+    subscriptions,
+  };
+}
+
+export async function ensureShopifyProductsDeleteWebhook() {
+  const current = await getShopifyProductsDeleteWebhookStatus();
+
+  if (current.registered) {
+    return current;
+  }
+
+  const uri = getShopifyProductsDeleteWebhookUrl();
+  const payload =
+    await runShopifyAdminGraphql<ShopifyWebhookSubscriptionCreatePayload>({
+      query: `
+        mutation EnsureProductDeleteWebhook(
+          $topic: WebhookSubscriptionTopic!
+          $webhookSubscription: WebhookSubscriptionInput!
+        ) {
+          webhookSubscriptionCreate(
+            topic: $topic
+            webhookSubscription: $webhookSubscription
+          ) {
+            webhookSubscription {
+              id
+              topic
+              uri
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `,
+      variables: {
+        topic: "PRODUCTS_DELETE",
+        webhookSubscription: {
+          uri,
+        },
+      },
+    });
+  const userErrors = payload.webhookSubscriptionCreate?.userErrors ?? [];
+
+  if (userErrors.length) {
+    throw new Error(
+      `Shopify webhook registration failed: ${userErrors
+        .map((error) =>
+          error.field?.length
+            ? `${error.field.join(".")}: ${error.message}`
+            : error.message,
+        )
+        .join("; ")}`,
+    );
+  }
+
+  return {
+    uri,
+    registered: true,
+    subscriptionId: payload.webhookSubscriptionCreate?.webhookSubscription?.id ?? null,
+    subscriptions: payload.webhookSubscriptionCreate?.webhookSubscription
+      ? [payload.webhookSubscriptionCreate.webhookSubscription]
+      : [],
   };
 }
 

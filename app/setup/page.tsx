@@ -22,7 +22,11 @@ const starterRoutes = [
   },
   {
     path: "/api/shopify/status",
-    description: "Uses the configured runtime token to verify that the deployed app can query the connected Shopify store.",
+    description: "Uses the configured runtime token to verify that the deployed app can query the connected Shopify store and reports the hard-delete webhook status.",
+  },
+  {
+    path: "/api/shopify/webhooks/register",
+    description: "Operator-authenticated route that registers the Shopify products/delete webhook on the installed app.",
   },
   {
     path: "/api/health",
@@ -104,6 +108,7 @@ export default function SetupPage() {
                   <p>Shopify client-credentials connect, preview fetches, and run history are wired.</p>
                   <p>One-time delta/full comparison exports run immediately from the dashboard and are stored as test-save files.</p>
                   <p>Live Merchant API writes now run when dry run is disabled, with full-sync reconciliation deleting stale Merchant rows.</p>
+                  <p>Hard-deleted Shopify products can now be queued through the products/delete webhook so the next sync can remove them from Merchant Center.</p>
                 </div>
               </div>
             </div>

@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { getConfigurationStatus } from "@/lib/env";
 import { getGoogleMerchantConnectionStatus } from "@/lib/google-merchant";
-import { getOperatorStoreStatus, getSyncSettings } from "@/lib/operator-store";
+import {
+  getOperatorStoreStatus,
+  getPendingShopifyDeletes,
+  getSyncSettings,
+} from "@/lib/operator-store";
 import {
   getRuntimeShopifyConnection,
+  getShopifyProductsDeleteWebhookStatus,
   getShopifyConfigurationStatus,
 } from "@/lib/shopify";
 import { decideSyncMode } from "@/lib/sync";
@@ -13,9 +18,21 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const now = new Date();
-  const [settings, googleMerchant] = await Promise.all([
+  const [settings, googleMerchant, pendingHardDeletes, productsDeleteWebhook] =
+    await Promise.all([
     getSyncSettings(),
     getGoogleMerchantConnectionStatus(),
+    getPendingShopifyDeletes(),
+    getShopifyProductsDeleteWebhookStatus().catch((error) => ({
+      uri: getShopifyConfigurationStatus().productsDeleteWebhookUrl,
+      registered: false,
+      subscriptionId: null,
+      subscriptions: [],
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unknown Shopify webhook status error.",
+    })),
   ]);
   const shopifyConnection = await getRuntimeShopifyConnection();
 
@@ -37,6 +54,10 @@ export async function GET() {
       shopify: {
         ...getShopifyConfigurationStatus(),
         connection: shopifyConnection,
+        pendingHardDeletes: pendingHardDeletes.length,
+        webhooks: {
+          productsDelete: productsDeleteWebhook,
+        },
       },
       googleMerchant,
     },

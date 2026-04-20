@@ -482,9 +482,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </h2>
           </div>
           <p className="max-w-2xl text-sm leading-7 text-muted">
-            Use this for a one-time QA export before approval. CSV is the
-            closest match for comparing against the current GMC file, and the
-            XLSX download also includes summary and exclusion sheets.
+            Use this for a one-time QA export that matches production sync
+            scope exactly. CSV is the closest match for comparing against the
+            current GMC file, and the XLSX download also includes summary and
+            exclusion sheets.
           </p>
         </div>
 
@@ -512,7 +513,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
                 </select>
               </label>
               <p className="text-sm leading-7 text-muted">
-                Test saves always run immediately and stay in dry-run mode. Use
+                Test saves always run immediately and stay in dry-run mode, but
+                they use the same delta/full scope rules as production. Use
                 them to generate a comparison file without touching Merchant
                 Center.
               </p>
