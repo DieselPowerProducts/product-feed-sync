@@ -836,6 +836,10 @@ async function deletePreviewExportArtifactById(id: string) {
   await deleteMemoryPreviewExport(id);
 }
 
+export async function deletePreviewExportArtifact(id: string) {
+  await deletePreviewExportArtifactById(id);
+}
+
 async function deleteHistoryArtifacts(entries: SyncHistoryEntry[]) {
   for (const entry of entries) {
     if (entry.artifactId) {
@@ -925,6 +929,40 @@ export async function writePreviewExportArtifact(id: string, artifact: unknown) 
   }
 
   await writeMemoryPreviewExport(id, artifact);
+}
+
+export async function appendPreviewExportArtifactChunk(
+  id: string,
+  chunk: {
+    rows?: unknown[];
+    excludedRows?: unknown[];
+    validationRows?: unknown[];
+    [key: string]: unknown;
+  },
+) {
+  const existing =
+    (await readPreviewExportArtifact<Record<string, unknown>>(id)) ?? {};
+  const existingRows = Array.isArray(existing.rows) ? existing.rows : [];
+  const existingExcludedRows = Array.isArray(existing.excludedRows)
+    ? existing.excludedRows
+    : [];
+  const existingValidationRows = Array.isArray(existing.validationRows)
+    ? existing.validationRows
+    : [];
+
+  await writePreviewExportArtifact(id, {
+    ...existing,
+    ...chunk,
+    rows: [...existingRows, ...(chunk.rows ?? [])],
+    excludedRows: [
+      ...existingExcludedRows,
+      ...(chunk.excludedRows ?? []),
+    ],
+    validationRows: [
+      ...existingValidationRows,
+      ...(chunk.validationRows ?? []),
+    ],
+  });
 }
 
 export async function readPreviewExportArtifact<T = unknown>(id: string) {

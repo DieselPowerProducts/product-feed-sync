@@ -5,12 +5,12 @@ import {
   isOperatorAuthConfigured,
   isValidOperatorSessionValue,
 } from "@/lib/operator-auth";
+import { startTestSaveExportJob } from "@/lib/live-sync-jobs";
 import { getSyncSettings } from "@/lib/operator-store";
-import { runSync, type SyncMode } from "@/lib/sync";
+import { type SyncMode } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300;
 
 function isSupportedMode(
   value: FormDataEntryValue | null,
@@ -46,16 +46,14 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = await getSyncSettings();
-  const result = await runSync(mode, {
-    trigger: "manual",
-    purpose: "test-save",
-    dryRun: true,
+  const startResult = await startTestSaveExportJob({
+    mode,
     settings,
-    prepareExportArtifact: true,
   });
 
-  return redirectToDashboard(
-    request,
-    result.ok ? "test-export-ready" : "test-export-failed",
-  );
+  if (!startResult.ok) {
+    return redirectToDashboard(request, "test-export-running");
+  }
+
+  return redirectToDashboard(request, "test-export-started");
 }

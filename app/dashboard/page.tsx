@@ -102,6 +102,16 @@ function getSavedMessage(saved: string | undefined) {
         tone: "success" as const,
         text: "The test save finished and the downloadable file is ready below.",
       };
+    case "test-export-started":
+      return {
+        tone: "success" as const,
+        text: "The test save was queued in the background. Refresh run history below in a few minutes for the completed file.",
+      };
+    case "test-export-running":
+      return {
+        tone: "error" as const,
+        text: "Another sync or test save is already running. Wait for it to finish before starting a new test save.",
+      };
     case "test-export-invalid":
       return {
         tone: "error" as const,
@@ -148,9 +158,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const saved = getSearchParam(searchParams, "saved");
   const flashMessage = getSavedMessage(saved);
   const syncHistory = history.filter((entry) => entry.purpose !== "test-save");
-  const testSaveFiles = history.filter(
-    (entry) => entry.purpose === "test-save" && entry.exportArtifactId,
-  );
+  const testSaveRuns = history.filter((entry) => entry.purpose === "test-save");
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
@@ -565,9 +573,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
               Test Save Files
             </p>
-            {testSaveFiles.length ? (
+            {testSaveRuns.length ? (
               <div className="mt-4 grid gap-4">
-                {testSaveFiles.map((entry) => (
+                {testSaveRuns.map((entry) => (
                   <div
                     key={`${entry.id}-test-save-file`}
                     className="rounded-[1.25rem] border border-line bg-white/80 p-4"
@@ -580,7 +588,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                             : "Delta product test save"}
                         </p>
                         <p className="mt-3 text-sm leading-7 text-muted">
-                          Ready {formatTimestamp(entry.finishedAt)}.
+                          {entry.ok
+                            ? `Ready ${formatTimestamp(entry.finishedAt)}.`
+                            : `Failed ${formatTimestamp(entry.finishedAt)}.`}
                         </p>
                         <p className="text-sm leading-7 text-muted">
                           Records {entry.stats.recordsPrepared}, excluded{" "}
@@ -590,30 +600,34 @@ export default async function DashboardPage(props: DashboardPageProps) {
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        <a
-                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=csv`}
-                          className="inline-flex rounded-full bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition-transform hover:-translate-y-0.5"
-                        >
-                          Download CSV
-                        </a>
-                        <a
-                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&format=xlsx`}
-                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                        >
-                          Download XLSX
-                        </a>
-                        <a
-                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&kind=validation&format=csv`}
-                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                        >
-                          Validation CSV
-                        </a>
-                        <a
-                          href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId ?? "")}&kind=excluded&format=csv`}
-                          className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                        >
-                          Excluded CSV
-                        </a>
+                        {entry.exportArtifactId ? (
+                          <>
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&format=csv`}
+                              className="inline-flex rounded-full bg-accent px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition-transform hover:-translate-y-0.5"
+                            >
+                              Download CSV
+                            </a>
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&format=xlsx`}
+                              className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                            >
+                              Download XLSX
+                            </a>
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&kind=validation&format=csv`}
+                              className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                            >
+                              Validation CSV
+                            </a>
+                            <a
+                              href={`/api/dashboard/export/preview?id=${encodeURIComponent(entry.exportArtifactId)}&kind=excluded&format=csv`}
+                              className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                            >
+                              Excluded CSV
+                            </a>
+                          </>
+                        ) : null}
                         {entry.artifactId ? (
                           <Link
                             href={`/dashboard/runs/${entry.artifactId}`}
@@ -638,7 +652,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
               </div>
             ) : (
               <div className="mt-4 rounded-[1.25rem] border border-dashed border-line bg-white/55 p-4 text-sm leading-7 text-muted">
-                No saved test files are ready yet.
+                No test-save attempts have completed yet.
               </div>
             )}
           </article>
