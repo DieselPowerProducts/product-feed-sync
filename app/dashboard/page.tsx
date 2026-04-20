@@ -3,6 +3,7 @@ import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
   getOperatorStoreStatus,
+  getBootstrapState,
   getSyncHistory,
   getSyncSettings,
 } from "@/lib/operator-store";
@@ -15,6 +16,7 @@ import {
 import {
   deleteHistoryEntryAction,
   logoutAction,
+  runFirstFullSyncAction,
   saveSettingsAction,
 } from "@/app/dashboard/actions";
 
@@ -80,6 +82,21 @@ function getSavedMessage(saved: string | undefined) {
         tone: "success" as const,
         text: "Dashboard settings were saved.",
       };
+    case "first-full-success":
+      return {
+        tone: "success" as const,
+        text: "Settings were saved and the first live full sync finished. Review run history below.",
+      };
+    case "first-full-failed":
+      return {
+        tone: "error" as const,
+        text: "Settings were saved, but the first live full sync failed. Review run history below.",
+      };
+    case "first-full-already-complete":
+      return {
+        tone: "success" as const,
+        text: "The first live full sync has already been completed, so that one-time bootstrap action is hidden.",
+      };
     case "test-export-ready":
       return {
         tone: "success" as const,
@@ -117,12 +134,13 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const searchParams = props.searchParams ? await props.searchParams : {};
   const now = new Date();
-  const [settings, history, storeStatus, shopifyConnection] =
+  const [settings, history, storeStatus, shopifyConnection, bootstrap] =
     await Promise.all([
     getSyncSettings(),
     getSyncHistory(20),
     Promise.resolve(getOperatorStoreStatus()),
     getRuntimeShopifyConnection(),
+    getBootstrapState(),
   ]);
   const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
@@ -255,6 +273,27 @@ export default async function DashboardPage(props: DashboardPageProps) {
               Save settings
             </button>
           </form>
+
+          {!bootstrap.firstFullSyncCompletedAt ? (
+            <div className="mt-5 rounded-[1.25rem] border border-line bg-white/65 p-4">
+              <p className="text-sm font-medium text-foreground">
+                One-time bootstrap
+              </p>
+              <p className="mt-2 text-sm leading-7 text-muted">
+                Run the first live full sync now after saving the cadence above.
+                This action disappears forever after the first successful live
+                full sync.
+              </p>
+              <form action={runFirstFullSyncAction} className="mt-4">
+                <button
+                  type="submit"
+                  className="rounded-full bg-[#1f1711] px-5 py-3 text-sm font-semibold text-[#f9f2e7] transition-transform hover:-translate-y-0.5"
+                >
+                  Run first full sync now
+                </button>
+              </form>
+            </div>
+          ) : null}
         </article>
 
         <article className="glass-panel rounded-[1.75rem] p-6">

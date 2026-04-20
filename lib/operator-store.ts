@@ -81,10 +81,15 @@ export interface PendingShopifyDeleteRecord {
   shopDomain?: string | null;
 }
 
+interface BootstrapState {
+  firstFullSyncCompletedAt: string | null;
+}
+
 interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
   pendingDeletes: PendingShopifyDeleteRecord[];
+  bootstrap: BootstrapState;
 }
 
 type StorageMode = "blob" | "local" | "memory";
@@ -112,7 +117,24 @@ function defaultState(): OperatorState {
     settings: defaultSettings(),
     history: [],
     pendingDeletes: [],
+    bootstrap: {
+      firstFullSyncCompletedAt: null,
+    },
   };
+}
+
+function deriveFirstFullSyncCompletedAt(history: SyncHistoryEntry[]) {
+  const matchingEntry = [...history]
+    .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+    .find(
+      (entry) =>
+        entry.ok &&
+        !entry.dryRun &&
+        entry.purpose === "sync" &&
+        entry.mode === "full",
+    );
+
+  return matchingEntry?.finishedAt ?? null;
 }
 
 function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
@@ -136,24 +158,26 @@ function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
 }
 
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
+  const history = Array.isArray(input?.history)
+    ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
+        ...entry,
+        purpose:
+          entry.purpose === "sync" || entry.purpose === "test-save"
+            ? entry.purpose
+            : null,
+        artifactId: entry.artifactId ?? null,
+        exportArtifactId: entry.exportArtifactId ?? null,
+        notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
+        stats: {
+          ...entry.stats,
+          validationIssues: entry.stats?.validationIssues ?? 0,
+        },
+      }))
+    : [];
+
   return {
     settings: sanitizeSettings(input?.settings),
-    history: Array.isArray(input?.history)
-      ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
-          ...entry,
-          purpose:
-            entry.purpose === "sync" || entry.purpose === "test-save"
-              ? entry.purpose
-              : null,
-          artifactId: entry.artifactId ?? null,
-          exportArtifactId: entry.exportArtifactId ?? null,
-          notes: Array.isArray(entry.notes) ? entry.notes.slice(0, 8) : [],
-          stats: {
-            ...entry.stats,
-            validationIssues: entry.stats?.validationIssues ?? 0,
-          },
-        }))
-      : [],
+    history,
     pendingDeletes: Array.isArray(input?.pendingDeletes)
       ? input.pendingDeletes
           .slice(0, PENDING_DELETE_LIMIT)
@@ -175,6 +199,11 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
             shopDomain: entry.shopDomain ?? null,
           }))
       : [],
+    bootstrap: {
+      firstFullSyncCompletedAt:
+        input?.bootstrap?.firstFullSyncCompletedAt ??
+        deriveFirstFullSyncCompletedAt(history),
+    },
   } satisfies OperatorState;
 }
 
@@ -400,6 +429,13 @@ export async function getSyncHistory(limit = 20) {
     .slice(0, limit);
 }
 
+export async function getBootstrapState() {
+  const state = await readState();
+  return {
+    firstFullSyncCompletedAt: state.bootstrap.firstFullSyncCompletedAt,
+  };
+}
+
 export async function getPendingShopifyDeletes() {
   const state = await readState();
 
@@ -496,6 +532,16 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
   await writeState({
     ...state,
     history: retainedHistory,
+    bootstrap: {
+      firstFullSyncCompletedAt:
+        state.bootstrap.firstFullSyncCompletedAt ??
+        (entry.ok &&
+        !entry.dryRun &&
+        entry.purpose === "sync" &&
+        entry.mode === "full"
+          ? entry.finishedAt
+          : null),
+    },
   });
 
   if (prunedScheduledSyncExports.length) {
