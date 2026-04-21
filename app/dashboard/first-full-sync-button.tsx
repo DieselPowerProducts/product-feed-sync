@@ -147,10 +147,7 @@ function getStageTone(
   return "border-line bg-white/65 text-muted";
 }
 
-export function FirstFullSyncButton(props?: {
-  disabled?: boolean;
-  disabledDetail?: string | null;
-}) {
+export function FirstFullSyncButton(props?: { disabled?: boolean }) {
   const router = useRouter();
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -381,7 +378,7 @@ export function FirstFullSyncButton(props?: {
 
   if (permanentlyDisabled) {
     return (
-      <div className="mt-4 space-y-4">
+      <div className="mt-4">
         <button
           type="button"
           disabled
@@ -389,11 +386,6 @@ export function FirstFullSyncButton(props?: {
         >
           Initial full sync completed
         </button>
-
-        <div className="rounded-[1.25rem] border border-[rgba(29,111,85,0.18)] bg-[rgba(29,111,85,0.08)] px-4 py-4 text-sm leading-7 text-success">
-          The one-time bootstrap full sync is locked to prevent accidental reruns.
-          {props?.disabledDetail ? ` ${props.disabledDetail}` : ""}
-        </div>
       </div>
     );
   }

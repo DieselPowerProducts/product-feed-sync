@@ -360,22 +360,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <p className="text-sm font-medium text-foreground">
               One-time bootstrap
             </p>
-            <p className="mt-2 text-sm leading-7 text-muted">
-              Run the first live full sync after saving the cadence above. Once
-              the initial catalog load succeeds, this control stays visible but
-              locked so the original bootstrap action cannot be rerun by
-              accident.
-            </p>
             <FirstFullSyncButton
               disabled={
                 Boolean(bootstrap.firstFullSyncCompletedAt) || Boolean(activeRun)
-              }
-              disabledDetail={
-                bootstrap.firstFullSyncCompletedAt
-                  ? `Completed on ${formatTimestamp(bootstrap.firstFullSyncCompletedAt)}. Ask to re-enable it only if you ever need a deliberate manual bootstrap again.`
-                  : activeRun
-                    ? "A live sync is already running. Use the active sync panel above to monitor or pause it."
-                  : null
               }
             />
           </div>
