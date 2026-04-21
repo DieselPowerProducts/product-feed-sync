@@ -14,6 +14,7 @@ import type {
   DeletePreviewSample,
   ExcludedPreviewSample,
   FeedPreviewRecord,
+  SyncExportResult,
   SyncExecutionContext,
   SyncRunArtifact,
   SyncRunResult,
@@ -490,6 +491,44 @@ async function loadPendingDeleteTargetsStep() {
   };
 }
 
+async function initializeExportArtifactStep(params: {
+  exportArtifactId: string;
+  input: LiveMerchantSyncWorkflowInput;
+  startedAt: string;
+  context: SyncExecutionContext;
+}) {
+  "use step";
+  const { writePreviewExportArtifact } = await import("@/lib/operator-store");
+
+  await writePreviewExportArtifact(params.exportArtifactId, {
+    ok: true,
+    mode: params.input.mode,
+    dryRun: false,
+    exhaustive: true,
+    startedAt: params.startedAt,
+    finishedAt: params.startedAt,
+    notes: ["Live sync export artifact is running in chunked mode."],
+    query: params.context.query,
+    lookbackStart: params.context.lookbackStart,
+    stats: {
+      pageSize: 250,
+      pagesScanned: 0,
+      scanCompleted: false,
+      totalProducts: params.context.totalProducts,
+      productsFetched: 0,
+      variantsConsidered: 0,
+      recordsPrepared: 0,
+      excluded: 0,
+      validationIssues: 0,
+      previewLimit: DEFAULT_PREVIEW_LIMIT,
+    },
+    exclusions: {},
+    rows: [],
+    excludedRows: [],
+    validationRows: [],
+  } satisfies SyncExportResult);
+}
+
 async function scanChunkStep(params: {
   context: SyncExecutionContext;
   cursor: string | null;
@@ -514,6 +553,24 @@ async function scanChunkStep(params: {
     ...chunk,
     durationMs: Date.now() - startedAt,
   };
+}
+
+async function appendExportChunkStep(params: {
+  exportArtifactId: string;
+  rows: FeedPreviewRecord[];
+  excludedRows: ExcludedPreviewSample[];
+  validationRows: ExcludedPreviewSample[];
+}) {
+  "use step";
+  const { appendPreviewExportArtifactChunk } = await import(
+    "@/lib/operator-store"
+  );
+
+  await appendPreviewExportArtifactChunk(params.exportArtifactId, {
+    rows: params.rows,
+    excludedRows: params.excludedRows,
+    validationRows: params.validationRows,
+  });
 }
 
 async function upsertChunkStep(params: {
@@ -641,6 +698,7 @@ async function persistSuccessfulRunStep(params: {
   input: LiveMerchantSyncWorkflowInput;
   context: SyncExecutionContext;
   startedAt: string;
+  exportArtifactId: string;
   includedSample: FeedPreviewRecord[];
   validationSample: ExcludedPreviewSample[];
   excludedSample: ExcludedPreviewSample[];
@@ -659,9 +717,12 @@ async function persistSuccessfulRunStep(params: {
     buildSyncScope,
     countValidationIssues,
   } = await import("@/lib/sync");
-  const { appendSyncHistory, writeRunArtifact } = await import(
-    "@/lib/operator-store"
-  );
+  const {
+    appendSyncHistory,
+    readPreviewExportArtifact,
+    writePreviewExportArtifact,
+    writeRunArtifact,
+  } = await import("@/lib/operator-store");
 
   const validationIssues = countValidationIssues(params.exclusions);
   const notes = buildSyncNotes({
@@ -677,13 +738,54 @@ async function persistSuccessfulRunStep(params: {
     `Live sync ran in chunked mode with a target of ${params.input.chunkTargetProducts ?? LIVE_SYNC_CHUNK_PRODUCT_TARGET} Shopify products per chunk.`,
   );
   notes.push(
-    "Large QA exports remain on the test-save path. Live sync history keeps representative samples instead of a full export file.",
+    "Feed, validation, and excluded downloads were saved with this live run so the same output can be inspected later from run history.",
   );
   if (params.pendingDeleteCount > 0) {
     notes.unshift(
       `${params.pendingDeleteCount} hard-deleted Shopify variant(s) were queued from webhook events and included in this run's Merchant delete scope.`,
     );
   }
+
+  const exportArtifact =
+    (await readPreviewExportArtifact<SyncExportResult>(params.exportArtifactId)) ?? {
+      rows: [],
+      excludedRows: [],
+      validationRows: [],
+    };
+  const finishedAt = new Date().toISOString();
+  const finalizedExport = {
+    ok: params.merchant.errorCount === 0,
+    mode: params.input.mode,
+    dryRun: false,
+    exhaustive: true,
+    startedAt: params.startedAt,
+    finishedAt,
+    notes,
+    query: params.context.query,
+    lookbackStart: params.context.lookbackStart,
+    stats: {
+      pageSize: 250,
+      pagesScanned: params.pagesScanned,
+      scanCompleted: true,
+      totalProducts: params.context.totalProducts,
+      productsFetched: params.productsFetched,
+      variantsConsidered: params.variantsConsidered,
+      recordsPrepared: params.recordsPrepared,
+      excluded: Object.values(params.exclusions).reduce((sum, count) => sum + count, 0),
+      validationIssues,
+      previewLimit: DEFAULT_PREVIEW_LIMIT,
+      merchantUpsertsAttempted: params.merchant.upsertsAttempted,
+      merchantUpsertsSucceeded: params.merchant.upsertsSucceeded,
+      merchantDeletesAttempted: params.merchant.deletesAttempted,
+      merchantDeletesSucceeded: params.merchant.deletesSucceeded,
+      merchantReconciliationDeletes: params.merchant.reconciliationDeletes,
+      merchantWriteErrors: params.merchant.errorCount,
+    },
+    exclusions: params.exclusions,
+    rows: exportArtifact.rows ?? [],
+    excludedRows: exportArtifact.excludedRows ?? [],
+    validationRows: exportArtifact.validationRows ?? [],
+  } satisfies SyncExportResult;
 
   const result = {
     ok: params.merchant.errorCount === 0,
@@ -699,7 +801,7 @@ async function persistSuccessfulRunStep(params: {
       true,
     ),
     startedAt: params.startedAt,
-    finishedAt: new Date().toISOString(),
+    finishedAt,
     configuration: getConfigurationStatus(),
     notes,
     query: params.context.query,
@@ -725,10 +827,12 @@ async function persistSuccessfulRunStep(params: {
     },
     exclusions: params.exclusions,
     preview: params.includedSample.slice(0, DEFAULT_PREVIEW_LIMIT),
-    exportArtifactId: null,
+    exportArtifactId: params.exportArtifactId,
     deleteSample: params.deleteSample,
     merchant: params.merchant,
   } satisfies SyncRunResult;
+
+  await writePreviewExportArtifact(params.exportArtifactId, finalizedExport);
 
   const artifactId = result.startedAt.replaceAll(":", "-");
   const artifact: SyncRunArtifact = {
@@ -744,7 +848,7 @@ async function persistSuccessfulRunStep(params: {
     scope: result.scope,
     query: result.query,
     lookbackStart: result.lookbackStart,
-    exportArtifactId: null,
+    exportArtifactId: params.exportArtifactId,
     notes: result.notes,
     stats: result.stats,
     includedSample: params.includedSample,
@@ -764,13 +868,20 @@ async function persistFailedRunStep(params: {
   input: LiveMerchantSyncWorkflowInput;
   context: SyncExecutionContext | null;
   startedAt: string;
+  exportArtifactId: string | null;
   message: string;
 }) {
   "use step";
   const { buildSyncScope } = await import("@/lib/sync");
-  const { appendSyncHistory, writeRunArtifact } = await import(
-    "@/lib/operator-store"
-  );
+  const {
+    appendSyncHistory,
+    deletePreviewExportArtifact,
+    writeRunArtifact,
+  } = await import("@/lib/operator-store");
+
+  if (params.exportArtifactId) {
+    await deletePreviewExportArtifact(params.exportArtifactId);
+  }
 
   const scope =
     params.context?.searchPlan
@@ -869,6 +980,7 @@ export async function liveMerchantSyncWorkflow(
     1,
     input.chunkTargetProducts ?? LIVE_SYNC_CHUNK_PRODUCT_TARGET,
   );
+  const exportArtifactId = `live-sync-${input.mode}-${startedAt.replaceAll(":", "-")}`;
   let context: SyncExecutionContext | null = null;
 
   console.log(
@@ -884,6 +996,12 @@ export async function liveMerchantSyncWorkflow(
     const merchantIdentity = await loadMerchantIdentityStep();
     const pendingDeleteScope = await loadPendingDeleteTargetsStep();
     const merchant = createMerchantSummary(merchantIdentity);
+    await initializeExportArtifactStep({
+      exportArtifactId,
+      input,
+      startedAt,
+      context,
+    });
     const exclusions: Record<string, number> = {};
     const includedSample: FeedPreviewRecord[] = [];
     const validationSample: ExcludedPreviewSample[] = [];
@@ -981,6 +1099,12 @@ export async function liveMerchantSyncWorkflow(
         deletePreviewKeys,
         chunk.deleteSamples,
       );
+      await appendExportChunkStep({
+        exportArtifactId,
+        rows: chunk.rows,
+        excludedRows: chunk.excludedRows,
+        validationRows: chunk.validationRows,
+      });
       seenKeys.push(...chunk.rows.map((row) => buildDeleteTargetKey(row)));
 
       const progressBase = createProgressSnapshot({
@@ -1305,6 +1429,7 @@ export async function liveMerchantSyncWorkflow(
       },
       context,
       startedAt,
+      exportArtifactId,
       includedSample,
       validationSample,
       excludedSample,
@@ -1371,6 +1496,7 @@ export async function liveMerchantSyncWorkflow(
       },
       context,
       startedAt,
+      exportArtifactId,
       message,
     });
     await publishWorkflowEvent(

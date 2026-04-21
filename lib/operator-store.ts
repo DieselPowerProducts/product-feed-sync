@@ -2,6 +2,12 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { del, get, put } from "@vercel/blob";
 import { env } from "@/lib/env";
+import {
+  deleteNeonObject,
+  isNeonConfigured,
+  readNeonObject,
+  writeNeonObject,
+} from "@/lib/neon";
 
 const STATE_BLOB_PATH = "dpp-product-feed-sync/operator-state.json";
 const RUN_ARTIFACT_BLOB_PREFIX = "dpp-product-feed-sync/run-artifacts";
@@ -21,6 +27,10 @@ const LOCAL_PREVIEW_EXPORT_DIR = path.join(
   ".local-state",
   "preview-exports",
 );
+const NEON_STATE_KEY = "state";
+const NEON_STATE_KIND = "operator-state";
+const NEON_RUN_ARTIFACT_PREFIX = "run-artifact";
+const NEON_PREVIEW_EXPORT_PREFIX = "preview-export";
 const HISTORY_LIMIT = 50;
 const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE = 2;
 const PENDING_DELETE_LIMIT = 5000;
@@ -119,7 +129,7 @@ interface OperatorState {
   activeSyncRun: ActiveSyncRunState | null;
 }
 
-type StorageMode = "blob" | "local" | "memory";
+type StorageMode = "neon" | "blob" | "local" | "memory";
 
 declare global {
   var __dppOperatorState: OperatorState | undefined;
@@ -344,9 +354,33 @@ function getLocalPreviewExportPath(id: string) {
   return path.join(LOCAL_PREVIEW_EXPORT_DIR, `${id}.json`);
 }
 
-function getStorageMode(): StorageMode {
+function getNeonRunArtifactKey(id: string) {
+  return `${NEON_RUN_ARTIFACT_PREFIX}:${id}`;
+}
+
+function getNeonPreviewExportKey(id: string) {
+  return `${NEON_PREVIEW_EXPORT_PREFIX}:${id}`;
+}
+
+function getStateStorageMode(): StorageMode {
+  if (isNeonConfigured()) {
+    return "neon";
+  }
+
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     return "blob";
+  }
+
+  return process.env.NODE_ENV === "production" ? "memory" : "local";
+}
+
+function getPreviewExportStorageMode(): StorageMode {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    return "blob";
+  }
+
+  if (isNeonConfigured()) {
+    return "neon";
   }
 
   return process.env.NODE_ENV === "production" ? "memory" : "local";
@@ -363,6 +397,55 @@ function safeJsonParse<T>(
     console.error(`[operator-store] Failed to parse ${label}.`, error);
     return fallback;
   }
+}
+
+async function readNeonStateRaw() {
+  const state = await readNeonObject<Partial<OperatorState>>(NEON_STATE_KEY);
+  return state ? sanitizeState(state) : null;
+}
+
+async function readFallbackStateForNeon() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    return readBlobState();
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return readLocalState();
+  }
+
+  return readMemoryState();
+}
+
+async function readNeonState() {
+  const existing = await readNeonStateRaw();
+
+  if (existing) {
+    return existing;
+  }
+
+  const fallbackState = await readFallbackStateForNeon();
+  await writeNeonState(fallbackState);
+  return fallbackState;
+}
+
+async function writeNeonState(state: OperatorState) {
+  await writeNeonObject(NEON_STATE_KEY, NEON_STATE_KIND, state);
+}
+
+async function readNeonArtifact<T>(id: string) {
+  return readNeonObject<T>(getNeonRunArtifactKey(id));
+}
+
+async function writeNeonArtifact(id: string, artifact: unknown) {
+  await writeNeonObject(
+    getNeonRunArtifactKey(id),
+    NEON_RUN_ARTIFACT_PREFIX,
+    artifact,
+  );
+}
+
+async function deleteNeonArtifact(id: string) {
+  await deleteNeonObject(getNeonRunArtifactKey(id));
 }
 
 async function readBlobState() {
@@ -496,7 +579,11 @@ async function deleteMemoryArtifact(id: string) {
 }
 
 async function readState() {
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    return readNeonState();
+  }
 
   if (mode === "blob") {
     return readBlobState();
@@ -511,7 +598,12 @@ async function readState() {
 
 async function writeState(state: OperatorState) {
   const normalized = sanitizeState(state);
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    await writeNeonState(normalized);
+    return;
+  }
 
   if (mode === "blob") {
     await writeBlobState(normalized);
@@ -527,12 +619,12 @@ async function writeState(state: OperatorState) {
 }
 
 export function getOperatorStoreStatus() {
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
 
   return {
     mode,
-    persistent: mode === "blob" || mode === "local",
-    configured: mode === "blob",
+    persistent: mode === "neon" || mode === "blob" || mode === "local",
+    configured: mode === "neon" || mode === "blob",
   };
 }
 
@@ -710,6 +802,98 @@ export async function getLatestSuccessfulLiveSyncHistory() {
   );
 }
 
+export async function seedSuccessfulLiveSyncBaseline(params: {
+  startedAt: string;
+  finishedAt?: string;
+  recordsPrepared?: number | null;
+  notes?: string[];
+}) {
+  const state = await readState();
+  const existingBaseline =
+    [...state.history]
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+      .find(
+        (entry) =>
+          entry.ok &&
+          !entry.dryRun &&
+          entry.purpose === "sync" &&
+          entry.mode === "full",
+      ) ?? null;
+
+  if (existingBaseline) {
+    return existingBaseline;
+  }
+
+  const finishedAt = params.finishedAt ?? new Date().toISOString();
+  const startedAt = params.startedAt;
+  const entryId = `seeded-full-${startedAt}`;
+  const recordsPrepared =
+    typeof params.recordsPrepared === "number" && params.recordsPrepared > 0
+      ? params.recordsPrepared
+      : 0;
+  const artifactId = startedAt.replaceAll(":", "-");
+  const notes = [
+    "Baseline was seeded manually after confirming that the initial full catalog was already present in the Merchant Center API data source.",
+    "Future delta runs now use this checkpoint instead of falling back or blocking on a missing successful full-sync history entry.",
+    ...(params.notes ?? []),
+  ].slice(0, 8);
+  const entry: SyncHistoryEntry = {
+    id: entryId,
+    startedAt,
+    finishedAt,
+    trigger: "manual",
+    purpose: "sync",
+    mode: "full",
+    dryRun: false,
+    ok: true,
+    scope:
+      "All Shopify products are scanned across active, draft, and archived statuses so current feed rows can be inserted and inactive rows can be deleted from Merchant Center.",
+    query: "",
+    lookbackStart: null,
+    artifactId,
+    exportArtifactId: null,
+    notes,
+    stats: {
+      pageSize: 250,
+      pagesScanned: 0,
+      scanCompleted: true,
+      totalProducts: recordsPrepared || null,
+      productsFetched: 0,
+      variantsConsidered: 0,
+      recordsPrepared,
+      excluded: 0,
+      validationIssues: 0,
+      previewLimit: 5,
+    },
+  };
+
+  await writeRunArtifact(artifactId, {
+    id: artifactId,
+    startedAt,
+    finishedAt,
+    trigger: "manual",
+    purpose: "sync",
+    mode: "full",
+    dryRun: false,
+    exhaustive: true,
+    ok: true,
+    scope: entry.scope,
+    query: entry.query,
+    lookbackStart: null,
+    exportArtifactId: null,
+    notes,
+    stats: entry.stats,
+    includedSample: [],
+    validationSample: [],
+    excludedSample: [],
+    deleteSample: [],
+    merchant: null,
+  });
+  await appendSyncHistory(entry);
+
+  return entry;
+}
+
 export async function appendSyncHistory(entry: SyncHistoryEntry) {
   const state = await readState();
   const combinedHistory = [entry, ...state.history];
@@ -745,7 +929,12 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
 }
 
 export async function writeRunArtifact(id: string, artifact: unknown) {
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    await writeNeonArtifact(id, artifact);
+    return;
+  }
 
   if (mode === "blob") {
     await writeBlobArtifact(id, artifact);
@@ -761,7 +950,37 @@ export async function writeRunArtifact(id: string, artifact: unknown) {
 }
 
 export async function readRunArtifact<T = unknown>(id: string) {
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    const artifact = await readNeonArtifact<T>(id);
+
+    if (artifact !== null) {
+      return artifact;
+    }
+
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      const blobArtifact = await readBlobArtifact<T>(id);
+
+      if (blobArtifact !== null) {
+        await writeNeonArtifact(id, blobArtifact);
+      }
+
+      return blobArtifact;
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      const localArtifact = await readLocalArtifact<T>(id);
+
+      if (localArtifact !== null) {
+        await writeNeonArtifact(id, localArtifact);
+      }
+
+      return localArtifact;
+    }
+
+    return readMemoryArtifact<T>(id);
+  }
 
   if (mode === "blob") {
     return readBlobArtifact<T>(id);
@@ -856,7 +1075,24 @@ async function deleteMemoryPreviewExport(id: string) {
 }
 
 async function deleteRunArtifactById(id: string) {
-  const mode = getStorageMode();
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    await deleteNeonArtifact(id);
+
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      await deleteBlobArtifact(id);
+      return;
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      await deleteLocalArtifact(id);
+      return;
+    }
+
+    await deleteMemoryArtifact(id);
+    return;
+  }
 
   if (mode === "blob") {
     await deleteBlobArtifact(id);
@@ -872,7 +1108,12 @@ async function deleteRunArtifactById(id: string) {
 }
 
 async function deletePreviewExportArtifactById(id: string) {
-  const mode = getStorageMode();
+  const mode = getPreviewExportStorageMode();
+
+  if (mode === "neon") {
+    await deleteNeonObject(getNeonPreviewExportKey(id));
+    return;
+  }
 
   if (mode === "blob") {
     await deleteBlobPreviewExport(id);
@@ -967,7 +1208,16 @@ async function deleteScheduledSyncExportArtifacts(entries: SyncHistoryEntry[]) {
 }
 
 export async function writePreviewExportArtifact(id: string, artifact: unknown) {
-  const mode = getStorageMode();
+  const mode = getPreviewExportStorageMode();
+
+  if (mode === "neon") {
+    await writeNeonObject(
+      getNeonPreviewExportKey(id),
+      NEON_PREVIEW_EXPORT_PREFIX,
+      artifact,
+    );
+    return;
+  }
 
   if (mode === "blob") {
     await writeBlobPreviewExport(id, artifact);
@@ -1017,7 +1267,11 @@ export async function appendPreviewExportArtifactChunk(
 }
 
 export async function readPreviewExportArtifact<T = unknown>(id: string) {
-  const mode = getStorageMode();
+  const mode = getPreviewExportStorageMode();
+
+  if (mode === "neon") {
+    return readNeonObject<T>(getNeonPreviewExportKey(id));
+  }
 
   if (mode === "blob") {
     return readBlobPreviewExport<T>(id);

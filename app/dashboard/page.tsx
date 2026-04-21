@@ -1,21 +1,16 @@
 import Link from "next/link";
 import { ActiveSyncRunPanel } from "@/app/dashboard/active-sync-run-panel";
-import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { FirstFullSyncButton } from "@/app/dashboard/first-full-sync-button";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
-  getActiveSyncRun,
   getOperatorStoreStatus,
   getBootstrapState,
   getSyncHistory,
   getSyncSettings,
 } from "@/lib/operator-store";
+import { resolveActiveLiveSyncRun } from "@/lib/live-sync-jobs";
 import { getRuntimeShopifyConnection } from "@/lib/shopify";
-import {
-  DEFAULT_PREVIEW_LIMIT,
-  decideSyncMode,
-  getUpcomingSyncDates,
-} from "@/lib/sync";
+import { getUpcomingSyncDates } from "@/lib/sync";
 import {
   deleteHistoryEntryAction,
   logoutAction,
@@ -37,7 +32,7 @@ type DashboardData = {
   storeStatus: ReturnType<typeof getOperatorStoreStatus>;
   shopifyConnection: Awaited<ReturnType<typeof getRuntimeShopifyConnection>>;
   bootstrap: Awaited<ReturnType<typeof getBootstrapState>>;
-  activeRun: Awaited<ReturnType<typeof getActiveSyncRun>>;
+  activeRun: Awaited<ReturnType<typeof resolveActiveLiveSyncRun>>;
   degraded: boolean;
 };
 
@@ -80,7 +75,11 @@ function formatDuration(startedAt: string, finishedAt: string) {
   return `${minutes}m ${seconds}s`;
 }
 
-function prettifyStorageMode(mode: "blob" | "local" | "memory") {
+function prettifyStorageMode(mode: "neon" | "blob" | "local" | "memory") {
+  if (mode === "neon") {
+    return "Neon Postgres";
+  }
+
   if (mode === "blob") {
     return "Vercel Blob";
   }
@@ -112,7 +111,7 @@ function getSavedMessage(saved: string | undefined) {
     case "first-full-already-complete":
       return {
         tone: "success" as const,
-        text: "The first live full sync has already been completed, so that one-time bootstrap action is hidden.",
+        text: "The first live full sync has already been completed, so that one-time bootstrap action remains visible but locked.",
       };
     case "test-export-ready":
       return {
@@ -168,7 +167,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
     Promise.resolve(fallbackStoreStatus),
     getRuntimeShopifyConnection(),
     getBootstrapState(),
-    getActiveSyncRun(),
+    resolveActiveLiveSyncRun(),
   ]);
 
   return {
@@ -213,7 +212,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
     activeRun,
     degraded,
   } = await loadDashboardData(now);
-  const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
   const saved = getSearchParam(searchParams, "saved");
   const flashMessage = getSavedMessage(saved);
@@ -230,16 +228,17 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </p>
             <h1 className="text-foreground">
               <span className="block text-4xl font-bold tracking-[-0.05em] md:text-[64px] md:tracking-[-4px]">
-                Product Feed Preview -
+                Merchant Feed Operations
               </span>
               <span className="block text-4xl font-semibold tracking-[0.02em] md:text-[2.5rem] md:tracking-[2px]">
                 Scheduling and Run History
               </span>
             </h1>
             <p className="max-w-2xl text-base leading-8 text-muted md:text-lg">
-              This dashboard is for validating normalized feed output and
-              controlling the sync schedule before Monday live Merchant Center
-              pushes start.
+              Use this dashboard to run Merchant Center syncs, watch daily or
+              manual progress in real time, pause a stuck run at safe
+              checkpoints, and download the exact files each completed run
+              produced.
             </p>
           </div>
 
@@ -277,8 +276,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <div className="mt-6 rounded-[1.4rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-4 text-sm leading-7 text-[#7d3d10]">
             History and settings are currently running on{" "}
             <strong>{prettifyStorageMode(storeStatus.mode)}</strong>. On Vercel,
-            that will not persist across cold starts unless you add{" "}
-            <code>BLOB_READ_WRITE_TOKEN</code>.
+            that will not persist across cold starts unless you configure a
+            database or persistent object store.
           </div>
         ) : null}
 
@@ -435,6 +434,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   {prettifyStorageMode(storeStatus.mode)}
                 </p>
                 <p className="max-w-xl text-sm leading-7 text-muted">
+                  Operational state now lives in the persistent app store.
+                  Downloadable run exports stay on object storage.
+                  <br />
                   Vercel cron still runs daily at <code>09:00 UTC</code>.
                   <br />
                   The UI controls cadence logic, not the cron clock itself.
@@ -443,13 +445,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </article>
           </div>
         </article>
-      </section>
-
-      <section className="mt-8">
-        <PreviewPanel
-          defaultPreviewLimit={DEFAULT_PREVIEW_LIMIT}
-          decisionReason={decision.reason}
-        />
       </section>
 
       <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
@@ -463,8 +458,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </h2>
           </div>
           <p className="text-sm text-muted">
-            Dry-run previews stay read-only. Live sync attempts now write
-            through the Merchant API when dry run is disabled.
+            Completed live syncs keep their downloadable feed, validation, and
+            excluded files here. Failed runs still keep their sample details so
+            you can inspect what happened.
           </p>
         </div>
 

@@ -32,6 +32,8 @@ function readBoolean(value: string | undefined, fallback: boolean) {
 
 export const env = {
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
+  databaseUrl:
+    process.env.DATABASE_URL ?? process.env.POSTGRES_URL ?? "",
   cronSecret: process.env.CRON_SECRET ?? "",
   manualSyncToken: process.env.MANUAL_SYNC_TOKEN ?? "",
   dashboardPassword: process.env.DASHBOARD_PASSWORD ?? "",
