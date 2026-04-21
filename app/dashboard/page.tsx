@@ -24,6 +24,20 @@ type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+type DashboardData = {
+  settings: {
+    anchorDate: string;
+    deltaIntervalDays: number;
+    fullIntervalDays: number;
+    updatedAt: string;
+  };
+  history: Awaited<ReturnType<typeof getSyncHistory>>;
+  storeStatus: ReturnType<typeof getOperatorStoreStatus>;
+  shopifyConnection: Awaited<ReturnType<typeof getRuntimeShopifyConnection>>;
+  bootstrap: Awaited<ReturnType<typeof getBootstrapState>>;
+  degraded: boolean;
+};
+
 function getSearchParam(
   searchParams: Record<string, string | string[] | undefined>,
   key: string,
@@ -137,6 +151,46 @@ function getSavedMessage(saved: string | undefined) {
   }
 }
 
+async function loadDashboardData(now: Date): Promise<DashboardData> {
+  const fallbackSettings = {
+    anchorDate: now.toISOString().slice(0, 10),
+    deltaIntervalDays: 7,
+    fullIntervalDays: 15,
+    updatedAt: now.toISOString(),
+  };
+  const fallbackStoreStatus = getOperatorStoreStatus();
+  const results = await Promise.allSettled([
+    getSyncSettings(),
+    getSyncHistory(20),
+    Promise.resolve(fallbackStoreStatus),
+    getRuntimeShopifyConnection(),
+    getBootstrapState(),
+  ]);
+
+  return {
+    settings:
+      results[0].status === "fulfilled" ? results[0].value : fallbackSettings,
+    history: results[1].status === "fulfilled" ? results[1].value : [],
+    storeStatus:
+      results[2].status === "fulfilled"
+        ? results[2].value
+        : fallbackStoreStatus,
+    shopifyConnection:
+      results[3].status === "fulfilled"
+        ? results[3].value
+        : {
+            connected: false,
+            error:
+              "Dashboard could not load Shopify connection status for this request.",
+          },
+    bootstrap:
+      results[4].status === "fulfilled"
+        ? results[4].value
+        : { firstFullSyncCompletedAt: null },
+    degraded: results.some((result) => result.status === "rejected"),
+  };
+}
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
@@ -145,14 +199,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const searchParams = props.searchParams ? await props.searchParams : {};
   const now = new Date();
-  const [settings, history, storeStatus, shopifyConnection, bootstrap] =
-    await Promise.all([
-    getSyncSettings(),
-    getSyncHistory(20),
-    Promise.resolve(getOperatorStoreStatus()),
-    getRuntimeShopifyConnection(),
-    getBootstrapState(),
-  ]);
+  const {
+    settings,
+    history,
+    storeStatus,
+    shopifyConnection,
+    bootstrap,
+    degraded,
+  } = await loadDashboardData(now);
   const decision = decideSyncMode(now, settings);
   const upcoming = getUpcomingSyncDates(now, settings);
   const saved = getSearchParam(searchParams, "saved");
@@ -221,6 +275,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <code>BLOB_READ_WRITE_TOKEN</code>.
           </div>
         ) : null}
+
+        {degraded ? (
+          <div className="mt-6 rounded-[1.4rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-4 text-sm leading-7 text-[#7d3d10]">
+            Part of the dashboard data could not be loaded on this request. The
+            page is running in fallback mode so you can still recover the app
+            and inspect available history.
+          </div>
+        ) : null}
       </section>
 
       <section className="mt-8 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
@@ -283,19 +345,25 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </button>
           </form>
 
-          {!bootstrap.firstFullSyncCompletedAt ? (
-            <div className="mt-5 rounded-[1.25rem] border border-line bg-white/65 p-4">
-              <p className="text-sm font-medium text-foreground">
-                One-time bootstrap
-              </p>
-              <p className="mt-2 text-sm leading-7 text-muted">
-                Run the first live full sync now after saving the cadence above.
-                This action disappears forever after the first successful live
-                full sync.
-              </p>
-              <FirstFullSyncButton />
-            </div>
-          ) : null}
+          <div className="mt-5 rounded-[1.25rem] border border-line bg-white/65 p-4">
+            <p className="text-sm font-medium text-foreground">
+              One-time bootstrap
+            </p>
+            <p className="mt-2 text-sm leading-7 text-muted">
+              Run the first live full sync after saving the cadence above. Once
+              the initial catalog load succeeds, this control stays visible but
+              locked so the original bootstrap action cannot be rerun by
+              accident.
+            </p>
+            <FirstFullSyncButton
+              disabled={Boolean(bootstrap.firstFullSyncCompletedAt)}
+              disabledDetail={
+                bootstrap.firstFullSyncCompletedAt
+                  ? `Completed on ${formatTimestamp(bootstrap.firstFullSyncCompletedAt)}. Ask to re-enable it only if you ever need a deliberate manual bootstrap again.`
+                  : null
+              }
+            />
+          </div>
         </article>
 
         <article className="glass-panel rounded-[1.75rem] p-6">

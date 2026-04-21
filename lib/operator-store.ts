@@ -326,6 +326,19 @@ function getStorageMode(): StorageMode {
   return process.env.NODE_ENV === "production" ? "memory" : "local";
 }
 
+function safeJsonParse<T>(
+  raw: string,
+  fallback: T,
+  label: string,
+) {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    console.error(`[operator-store] Failed to parse ${label}.`, error);
+    return fallback;
+  }
+}
+
 async function readBlobState() {
   const result = await get(STATE_BLOB_PATH, {
     access: "private",
@@ -337,7 +350,9 @@ async function readBlobState() {
   }
 
   const text = await new Response(result.stream).text();
-  return sanitizeState(JSON.parse(text) as Partial<OperatorState>);
+  return sanitizeState(
+    safeJsonParse<Partial<OperatorState>>(text, defaultState(), STATE_BLOB_PATH),
+  );
 }
 
 async function writeBlobState(state: OperatorState) {
@@ -360,7 +375,11 @@ async function readBlobArtifact<T>(id: string) {
   }
 
   const text = await new Response(result.stream).text();
-  return JSON.parse(text) as T;
+  return safeJsonParse<T | null>(
+    text,
+    null,
+    getRunArtifactBlobPath(id),
+  );
 }
 
 async function writeBlobArtifact(id: string, artifact: unknown) {
@@ -383,7 +402,9 @@ async function deleteBlobArtifact(id: string) {
 async function readLocalState() {
   try {
     const raw = await readFile(LOCAL_STATE_PATH, "utf8");
-    return sanitizeState(JSON.parse(raw) as Partial<OperatorState>);
+    return sanitizeState(
+      safeJsonParse<Partial<OperatorState>>(raw, defaultState(), LOCAL_STATE_PATH),
+    );
   } catch {
     return defaultState();
   }
@@ -397,7 +418,7 @@ async function writeLocalState(state: OperatorState) {
 async function readLocalArtifact<T>(id: string) {
   try {
     const raw = await readFile(getLocalRunArtifactPath(id), "utf8");
-    return JSON.parse(raw) as T;
+    return safeJsonParse<T | null>(raw, null, getLocalRunArtifactPath(id));
   } catch {
     return null;
   }
@@ -738,7 +759,11 @@ async function readBlobPreviewExport<T>(id: string) {
   }
 
   const text = await new Response(result.stream).text();
-  return JSON.parse(text) as T;
+  return safeJsonParse<T | null>(
+    text,
+    null,
+    getPreviewExportBlobPath(id),
+  );
 }
 
 async function writeBlobPreviewExport(id: string, artifact: unknown) {
@@ -761,7 +786,7 @@ async function deleteBlobPreviewExport(id: string) {
 async function readLocalPreviewExport<T>(id: string) {
   try {
     const raw = await readFile(getLocalPreviewExportPath(id), "utf8");
-    return JSON.parse(raw) as T;
+    return safeJsonParse<T | null>(raw, null, getLocalPreviewExportPath(id));
   } catch {
     return null;
   }

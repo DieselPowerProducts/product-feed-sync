@@ -15,6 +15,15 @@ type RouteContext = {
   params: Promise<{ runId: string }>;
 };
 
+function parseEventIndex(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export async function GET(request: NextRequest, { params }: RouteContext) {
   if (
     !isOperatorAuthConfigured() ||
@@ -35,20 +44,35 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
   }
 
   const encoder = new TextEncoder();
-  const readable = run.getReadable<LiveMerchantSyncWorkflowEvent>();
+  const requestedStartIndex =
+    parseEventIndex(request.nextUrl.searchParams.get("startIndex")) ??
+    (() => {
+      const lastEventId = parseEventIndex(request.headers.get("last-event-id"));
+      return lastEventId === null ? null : lastEventId + 1;
+    })();
+
+  const readable = run.getReadable<LiveMerchantSyncWorkflowEvent>(
+    requestedStartIndex === null ? undefined : { startIndex: requestedStartIndex },
+  );
+  let eventIndex = requestedStartIndex ?? 0;
   const stream = readable.pipeThrough(
     new TransformStream<LiveMerchantSyncWorkflowEvent, Uint8Array>({
       transform(chunk, controller) {
+        const nextEventId = eventIndex;
+        eventIndex += 1;
+
         if (chunk?.type === "result") {
           controller.enqueue(
-            encoder.encode(`event: result\ndata: ${JSON.stringify(chunk.result)}\n\n`),
+            encoder.encode(
+              `id: ${nextEventId}\nevent: result\ndata: ${JSON.stringify(chunk.result)}\n\n`,
+            ),
           );
           return;
         }
 
         controller.enqueue(
           encoder.encode(
-            `event: progress\ndata: ${JSON.stringify(chunk.progress)}\n\n`,
+            `id: ${nextEventId}\nevent: progress\ndata: ${JSON.stringify(chunk.progress)}\n\n`,
           ),
         );
       },

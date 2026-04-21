@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const ACTIVE_RUN_STORAGE_KEY = "dpp:first-full-sync-run-id";
+const ACTIVE_RUN_EVENT_INDEX_STORAGE_KEY = "dpp:first-full-sync-event-index";
 const STREAM_RECONNECT_DELAY_MS = 1500;
 
 type FullSyncProgress = {
@@ -146,21 +147,44 @@ function getStageTone(
   return "border-line bg-white/65 text-muted";
 }
 
-export function FirstFullSyncButton() {
+export function FirstFullSyncButton(props?: {
+  disabled?: boolean;
+  disabledDetail?: string | null;
+}) {
   const router = useRouter();
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const settledRunIdRef = useRef<string | null>(null);
+  const lastEventIndexRef = useRef<number>(-1);
   const [runId, setRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<FullSyncProgress | null>(null);
+  const permanentlyDisabled = props?.disabled ?? false;
 
   useEffect(() => {
+    if (permanentlyDisabled) {
+      rememberRun(null);
+      rememberLastEventIndex(null);
+      lastEventIndexRef.current = -1;
+      return;
+    }
+
     const existingRunId =
       typeof window !== "undefined"
         ? window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY)
         : null;
+    const existingEventIndex =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(ACTIVE_RUN_EVENT_INDEX_STORAGE_KEY)
+        : null;
+    const parsedEventIndex = existingEventIndex
+      ? Number.parseInt(existingEventIndex, 10)
+      : Number.NaN;
+
+    if (Number.isFinite(parsedEventIndex) && parsedEventIndex >= 0) {
+      lastEventIndexRef.current = parsedEventIndex;
+    }
 
     if (existingRunId) {
       setRunId(existingRunId);
@@ -175,7 +199,7 @@ export function FirstFullSyncButton() {
         window.clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, []);
+  }, [permanentlyDisabled]);
 
   function rememberRun(nextRunId: string | null) {
     if (typeof window === "undefined") {
@@ -188,6 +212,22 @@ export function FirstFullSyncButton() {
     }
 
     window.localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+  }
+
+  function rememberLastEventIndex(nextEventIndex: number | null) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (typeof nextEventIndex === "number" && nextEventIndex >= 0) {
+      window.localStorage.setItem(
+        ACTIVE_RUN_EVENT_INDEX_STORAGE_KEY,
+        String(nextEventIndex),
+      );
+      return;
+    }
+
+    window.localStorage.removeItem(ACTIVE_RUN_EVENT_INDEX_STORAGE_KEY);
   }
 
   function scheduleReconnect(nextRunId: string) {
@@ -214,15 +254,29 @@ export function FirstFullSyncButton() {
       setError(null);
     }
 
+    const searchParams = new URLSearchParams({
+      ts: String(Date.now()),
+    });
+
+    if (options?.reconnecting && lastEventIndexRef.current >= 0) {
+      searchParams.set("startIndex", String(lastEventIndexRef.current + 1));
+    }
+
     const source = new EventSource(
-      `/api/dashboard/sync-runs/${encodeURIComponent(nextRunId)}/stream?ts=${Date.now()}`,
+      `/api/dashboard/sync-runs/${encodeURIComponent(nextRunId)}/stream?${searchParams.toString()}`,
     );
     eventSourceRef.current = source;
 
     source.addEventListener("progress", (event) => {
-      const payload = JSON.parse(
-        (event as MessageEvent<string>).data,
-      ) as FullSyncProgress;
+      const messageEvent = event as MessageEvent<string>;
+      const eventIndex = Number.parseInt(messageEvent.lastEventId, 10);
+
+      if (Number.isFinite(eventIndex) && eventIndex >= 0) {
+        lastEventIndexRef.current = eventIndex;
+        rememberLastEventIndex(eventIndex);
+      }
+
+      const payload = JSON.parse(messageEvent.data) as FullSyncProgress;
       settledRunIdRef.current = null;
       setProgress(payload);
       setError(null);
@@ -230,14 +284,21 @@ export function FirstFullSyncButton() {
     });
 
     source.addEventListener("result", (event) => {
-      const payload = JSON.parse(
-        (event as MessageEvent<string>).data,
-      ) as FullSyncResult;
+      const messageEvent = event as MessageEvent<string>;
+      const eventIndex = Number.parseInt(messageEvent.lastEventId, 10);
+
+      if (Number.isFinite(eventIndex) && eventIndex >= 0) {
+        lastEventIndexRef.current = eventIndex;
+      }
+
+      const payload = JSON.parse(messageEvent.data) as FullSyncResult;
 
       settledRunIdRef.current = nextRunId;
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       rememberRun(null);
+      rememberLastEventIndex(null);
+      lastEventIndexRef.current = -1;
       setRunId(null);
       setIsLoading(false);
       setError(payload.ok ? null : payload.message);
@@ -264,7 +325,13 @@ export function FirstFullSyncButton() {
   }
 
   async function startFirstFullSync() {
+    if (permanentlyDisabled) {
+      return;
+    }
+
     setError(null);
+    lastEventIndexRef.current = -1;
+    rememberLastEventIndex(null);
     setProgress({
       stage: "counting",
       exhaustive: true,
@@ -311,6 +378,25 @@ export function FirstFullSyncButton() {
   }
 
   const progressPercent = getApproximateProgressPercent(progress);
+
+  if (permanentlyDisabled) {
+    return (
+      <div className="mt-4 space-y-4">
+        <button
+          type="button"
+          disabled
+          className="inline-flex items-center justify-center gap-2 rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-100"
+        >
+          Initial full sync completed
+        </button>
+
+        <div className="rounded-[1.25rem] border border-[rgba(29,111,85,0.18)] bg-[rgba(29,111,85,0.08)] px-4 py-4 text-sm leading-7 text-success">
+          The one-time bootstrap full sync is locked to prevent accidental reruns.
+          {props?.disabledDetail ? ` ${props.disabledDetail}` : ""}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-4 space-y-4">
