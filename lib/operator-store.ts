@@ -32,7 +32,17 @@ const NEON_STATE_KIND = "operator-state";
 const NEON_RUN_ARTIFACT_PREFIX = "run-artifact";
 const NEON_PREVIEW_EXPORT_PREFIX = "preview-export";
 const HISTORY_LIMIT = 50;
-const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE = 2;
+const RETAINED_SYNC_HISTORY_BY_MODE: Record<SyncHistoryEntry["mode"], number> = {
+  delta: 5,
+  full: 1,
+};
+const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE: Record<
+  SyncHistoryEntry["mode"],
+  number
+> = {
+  delta: 5,
+  full: 1,
+};
 const PENDING_DELETE_LIMIT = 5000;
 
 export type SyncHistoryPurpose = "sync" | "test-save";
@@ -896,13 +906,19 @@ export async function seedSuccessfulLiveSyncBaseline(params: {
 
 export async function appendSyncHistory(entry: SyncHistoryEntry) {
   const state = await readState();
-  const combinedHistory = [entry, ...state.history];
-  const cappedHistory = combinedHistory.slice(0, HISTORY_LIMIT);
+  const combinedHistory = [entry, ...state.history].sort((left, right) =>
+    right.startedAt.localeCompare(left.startedAt),
+  );
+  const {
+    history: retainedSyncWindowHistory,
+    prunedSyncEntries,
+  } = retainSyncHistoryWindow(combinedHistory);
+  const cappedHistory = retainedSyncWindowHistory.slice(0, HISTORY_LIMIT);
   const {
     history: retainedHistory,
     prunedScheduledSyncExports,
   } = retainScheduledSyncExports(cappedHistory);
-  const evictedHistory = combinedHistory.slice(HISTORY_LIMIT);
+  const evictedHistory = retainedSyncWindowHistory.slice(HISTORY_LIMIT);
 
   await writeState({
     ...state,
@@ -925,6 +941,10 @@ export async function appendSyncHistory(entry: SyncHistoryEntry) {
 
   if (evictedHistory.length) {
     await deleteHistoryArtifacts(evictedHistory);
+  }
+
+  if (prunedSyncEntries.length) {
+    await deleteHistoryArtifacts(prunedSyncEntries);
   }
 }
 
@@ -1160,7 +1180,10 @@ function retainScheduledSyncExports(history: SyncHistoryEntry[]) {
       return entry;
     }
 
-    if (retainedByMode[entry.mode] < RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE) {
+    if (
+      retainedByMode[entry.mode] <
+      RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE[entry.mode]
+    ) {
       retainedByMode[entry.mode] += 1;
       return entry;
     }
@@ -1175,6 +1198,33 @@ function retainScheduledSyncExports(history: SyncHistoryEntry[]) {
   return {
     history: retainedHistory,
     prunedScheduledSyncExports,
+  };
+}
+
+function retainSyncHistoryWindow(history: SyncHistoryEntry[]) {
+  const retainedByMode: Record<SyncHistoryEntry["mode"], number> = {
+    delta: 0,
+    full: 0,
+  };
+  const prunedSyncEntries: SyncHistoryEntry[] = [];
+
+  const retainedHistory = history.filter((entry) => {
+    if (entry.purpose !== "sync") {
+      return true;
+    }
+
+    if (retainedByMode[entry.mode] < RETAINED_SYNC_HISTORY_BY_MODE[entry.mode]) {
+      retainedByMode[entry.mode] += 1;
+      return true;
+    }
+
+    prunedSyncEntries.push(entry);
+    return false;
+  });
+
+  return {
+    history: retainedHistory,
+    prunedSyncEntries,
   };
 }
 
