@@ -89,6 +89,7 @@ export interface ActiveSyncRunState {
   purpose: SyncHistoryPurpose;
   mode: "delta" | "full";
   status: "queued" | "running" | "completed" | "failed";
+  controlState: "running" | "pause_requested" | "paused";
   chunkTargetProducts: number;
   chunksCompleted: number;
   message: string;
@@ -98,6 +99,10 @@ export interface ActiveSyncRunState {
   merchantPhase: "reconciling" | "upserts" | "deletes" | null;
   merchantCompleted: number;
   merchantTotal: number | null;
+  merchantPagesScanned: number;
+  merchantRowsScanned: number;
+  merchantMatchedRows: number;
+  merchantDeleteTargets: number;
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
 }
@@ -246,6 +251,11 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
               input.activeSyncRun.status === "failed"
                 ? input.activeSyncRun.status
                 : "queued",
+            controlState:
+              input.activeSyncRun.controlState === "pause_requested" ||
+              input.activeSyncRun.controlState === "paused"
+                ? input.activeSyncRun.controlState
+                : "running",
             chunkTargetProducts: readPositiveInteger(
               Number(input.activeSyncRun.chunkTargetProducts),
               1,
@@ -281,6 +291,22 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
               typeof input.activeSyncRun.merchantTotal === "number"
                 ? input.activeSyncRun.merchantTotal
                 : null,
+            merchantPagesScanned: Math.max(
+              0,
+              Number(input.activeSyncRun.merchantPagesScanned ?? 0),
+            ),
+            merchantRowsScanned: Math.max(
+              0,
+              Number(input.activeSyncRun.merchantRowsScanned ?? 0),
+            ),
+            merchantMatchedRows: Math.max(
+              0,
+              Number(input.activeSyncRun.merchantMatchedRows ?? 0),
+            ),
+            merchantDeleteTargets: Math.max(
+              0,
+              Number(input.activeSyncRun.merchantDeleteTargets ?? 0),
+            ),
             lastChunkDurationMs:
               typeof input.activeSyncRun.lastChunkDurationMs === "number" &&
               Number.isFinite(input.activeSyncRun.lastChunkDurationMs)

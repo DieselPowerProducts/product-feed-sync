@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { ActiveSyncRunPanel } from "@/app/dashboard/active-sync-run-panel";
 import { PreviewPanel } from "@/app/dashboard/preview-panel";
 import { FirstFullSyncButton } from "@/app/dashboard/first-full-sync-button";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
+  getActiveSyncRun,
   getOperatorStoreStatus,
   getBootstrapState,
   getSyncHistory,
@@ -35,6 +37,7 @@ type DashboardData = {
   storeStatus: ReturnType<typeof getOperatorStoreStatus>;
   shopifyConnection: Awaited<ReturnType<typeof getRuntimeShopifyConnection>>;
   bootstrap: Awaited<ReturnType<typeof getBootstrapState>>;
+  activeRun: Awaited<ReturnType<typeof getActiveSyncRun>>;
   degraded: boolean;
 };
 
@@ -165,6 +168,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
     Promise.resolve(fallbackStoreStatus),
     getRuntimeShopifyConnection(),
     getBootstrapState(),
+    getActiveSyncRun(),
   ]);
 
   return {
@@ -187,6 +191,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
       results[4].status === "fulfilled"
         ? results[4].value
         : { firstFullSyncCompletedAt: null },
+    activeRun: results[5].status === "fulfilled" ? results[5].value : null,
     degraded: results.some((result) => result.status === "rejected"),
   };
 }
@@ -205,6 +210,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
     storeStatus,
     shopifyConnection,
     bootstrap,
+    activeRun,
     degraded,
   } = await loadDashboardData(now);
   const decision = decideSyncMode(now, settings);
@@ -285,6 +291,12 @@ export default async function DashboardPage(props: DashboardPageProps) {
         ) : null}
       </section>
 
+      {activeRun ? (
+        <section className="mt-8">
+          <ActiveSyncRunPanel initialRun={activeRun} />
+        </section>
+      ) : null}
+
       <section className="mt-8 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
         <article className="glass-panel rounded-[1.75rem] p-6">
           <div className="flex items-end justify-between gap-4">
@@ -356,10 +368,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
               accident.
             </p>
             <FirstFullSyncButton
-              disabled={Boolean(bootstrap.firstFullSyncCompletedAt)}
+              disabled={
+                Boolean(bootstrap.firstFullSyncCompletedAt) || Boolean(activeRun)
+              }
               disabledDetail={
                 bootstrap.firstFullSyncCompletedAt
                   ? `Completed on ${formatTimestamp(bootstrap.firstFullSyncCompletedAt)}. Ask to re-enable it only if you ever need a deliberate manual bootstrap again.`
+                  : activeRun
+                    ? "A live sync is already running. Use the active sync panel above to monitor or pause it."
                   : null
               }
             />

@@ -144,6 +144,10 @@ export interface MerchantCatalogSyncProgress {
   total: number | null;
   errors: number;
   message: string;
+  pagesScanned?: number;
+  rowsScanned?: number;
+  matchedRows?: number;
+  deleteTargets?: number;
 }
 
 export interface MerchantWriteBatchSummary {
@@ -564,38 +568,49 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-export async function listConfiguredDataSourceProducts() {
+export async function listConfiguredDataSourceProductPage(pageToken: string | null) {
   const accountName = getMerchantAccountName();
   const dataSourceName = getMerchantDataSourceName();
+  const response: MerchantProductsListResponse =
+    await merchantRequest<MerchantProductsListResponse>(
+    `/products/v1/${accountName}/products`,
+    {
+      query: {
+        pageSize: MERCHANT_LIST_PAGE_SIZE,
+        pageToken,
+      },
+    },
+  );
+  const matches: MerchantDeleteTarget[] = [];
+
+  for (const product of response.products ?? []) {
+    if (product.dataSource !== dataSourceName) {
+      continue;
+    }
+
+    matches.push({
+      offerId: product.offerId,
+      contentLanguage: product.contentLanguage,
+      feedLabel: product.feedLabel,
+      reason: "missing_from_full_catalog_reconciliation",
+    });
+  }
+
+  return {
+    matches,
+    nextPageToken: response.nextPageToken ?? null,
+    rowsScanned: response.products?.length ?? 0,
+  };
+}
+
+export async function listConfiguredDataSourceProducts() {
   const matches: MerchantDeleteTarget[] = [];
   let pageToken: string | null = null;
 
   do {
-    const response: MerchantProductsListResponse =
-      await merchantRequest<MerchantProductsListResponse>(
-      `/products/v1/${accountName}/products`,
-      {
-        query: {
-          pageSize: MERCHANT_LIST_PAGE_SIZE,
-          pageToken,
-        },
-      },
-    );
-
-    for (const product of response.products ?? []) {
-      if (product.dataSource !== dataSourceName) {
-        continue;
-      }
-
-      matches.push({
-        offerId: product.offerId,
-        contentLanguage: product.contentLanguage,
-        feedLabel: product.feedLabel,
-        reason: "missing_from_full_catalog_reconciliation",
-      });
-    }
-
-    pageToken = response.nextPageToken ?? null;
+    const page = await listConfiguredDataSourceProductPage(pageToken);
+    matches.push(...page.matches);
+    pageToken = page.nextPageToken;
   } while (pageToken);
 
   return matches;

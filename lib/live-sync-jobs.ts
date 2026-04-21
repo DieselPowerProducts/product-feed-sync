@@ -48,6 +48,7 @@ async function setQueuedActiveRun(params: {
     purpose: params.purpose,
     mode: params.mode,
     status: "queued",
+    controlState: "running",
     chunkTargetProducts: LIVE_SYNC_CHUNK_PRODUCT_TARGET,
     chunksCompleted: 0,
     message: params.message,
@@ -57,6 +58,10 @@ async function setQueuedActiveRun(params: {
     merchantPhase: null,
     merchantCompleted: 0,
     merchantTotal: null,
+    merchantPagesScanned: 0,
+    merchantRowsScanned: 0,
+    merchantMatchedRows: 0,
+    merchantDeleteTargets: 0,
     lastChunkDurationMs: null,
     averageChunkDurationMs: null,
   });

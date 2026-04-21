@@ -1,10 +1,11 @@
-import { getWorkflowMetadata, getWritable } from "workflow";
+import { getWorkflowMetadata, getWritable, sleep } from "workflow";
 import type {
   MerchantCatalogSyncSummary,
   MerchantDeleteTarget,
   MerchantSyncError,
 } from "@/lib/google-merchant";
 import type {
+  ActiveSyncRunState,
   PendingShopifyDeleteRecord,
   SyncHistoryPurpose,
   SyncSettings,
@@ -47,6 +48,11 @@ export interface LiveMerchantSyncWorkflowProgress {
   merchantCompleted?: number;
   merchantTotal?: number | null;
   merchantErrors?: number;
+  merchantPagesScanned?: number;
+  merchantRowsScanned?: number;
+  merchantMatchedRows?: number;
+  merchantDeleteTargets?: number;
+  controlState?: ActiveSyncRunState["controlState"];
   chunksCompleted: number;
   chunkTargetProducts: number;
   elapsedMs: number;
@@ -251,6 +257,11 @@ function createProgressSnapshot(params: {
   merchantCompleted?: number;
   merchantTotal?: number | null;
   merchantErrors?: number;
+  merchantPagesScanned?: number;
+  merchantRowsScanned?: number;
+  merchantMatchedRows?: number;
+  merchantDeleteTargets?: number;
+  controlState?: ActiveSyncRunState["controlState"];
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
 }) {
@@ -266,6 +277,11 @@ function createProgressSnapshot(params: {
     merchantCompleted: params.merchantCompleted,
     merchantTotal: params.merchantTotal,
     merchantErrors: params.merchantErrors,
+    merchantPagesScanned: params.merchantPagesScanned,
+    merchantRowsScanned: params.merchantRowsScanned,
+    merchantMatchedRows: params.merchantMatchedRows,
+    merchantDeleteTargets: params.merchantDeleteTargets,
+    controlState: params.controlState ?? "running",
     chunksCompleted: params.chunksCompleted,
     chunkTargetProducts: params.chunkTargetProducts,
     elapsedMs: 0,
@@ -314,7 +330,14 @@ async function publishWorkflowEvent(
 
   try {
     if (normalizedProgress) {
-      const { updateActiveSyncRun } = await import("@/lib/operator-store");
+      const { getActiveSyncRun, updateActiveSyncRun } = await import(
+        "@/lib/operator-store"
+      );
+      const activeRun = await getActiveSyncRun();
+      const controlState =
+        activeRun?.runId === runId
+          ? activeRun.controlState
+          : normalizedProgress.controlState ?? "running";
       await updateActiveSyncRun(runId, {
         status: status ?? "running",
         finishedAt:
@@ -329,9 +352,15 @@ async function publishWorkflowEvent(
         merchantPhase: normalizedProgress.merchantPhase ?? null,
         merchantCompleted: normalizedProgress.merchantCompleted ?? 0,
         merchantTotal: normalizedProgress.merchantTotal ?? null,
+        merchantPagesScanned: normalizedProgress.merchantPagesScanned ?? 0,
+        merchantRowsScanned: normalizedProgress.merchantRowsScanned ?? 0,
+        merchantMatchedRows: normalizedProgress.merchantMatchedRows ?? 0,
+        merchantDeleteTargets: normalizedProgress.merchantDeleteTargets ?? 0,
+        controlState,
         lastChunkDurationMs: normalizedProgress.lastChunkDurationMs,
         averageChunkDurationMs: normalizedProgress.averageChunkDurationMs,
       });
+      normalizedProgress.controlState = controlState;
     } else if (status) {
       const { updateActiveSyncRun } = await import("@/lib/operator-store");
       await updateActiveSyncRun(runId, {
@@ -360,6 +389,55 @@ async function publishWorkflowEvent(
     }
   } catch (error) {
     console.error("[liveMerchantSyncWorkflow] event write failed", error);
+  }
+}
+
+async function getRunControlStateStep(runId: string) {
+  "use step";
+  const { getActiveSyncRun } = await import("@/lib/operator-store");
+  const activeRun = await getActiveSyncRun();
+  return activeRun?.runId === runId ? activeRun.controlState : "running";
+}
+
+async function markRunPausedStep(runId: string, message: string) {
+  "use step";
+  const { updateActiveSyncRun } = await import("@/lib/operator-store");
+  await updateActiveSyncRun(runId, {
+    controlState: "paused",
+    message,
+  });
+}
+
+async function waitForResumeIfPaused(params: {
+  runId: string;
+  startedAt: string;
+  progress: LiveMerchantSyncWorkflowProgress;
+}) {
+  while (true) {
+    const controlState = await getRunControlStateStep(params.runId);
+
+    if (controlState === "running") {
+      return;
+    }
+
+    const pausedProgress = {
+      ...params.progress,
+      controlState: "paused" as const,
+      message:
+        "Sync is paused. Resume it from the dashboard to continue from the next checkpoint.",
+    } satisfies LiveMerchantSyncWorkflowProgress;
+    await markRunPausedStep(params.runId, pausedProgress.message);
+    await publishWorkflowEvent(
+      params.runId,
+      {
+        type: "progress",
+        progress: pausedProgress,
+      },
+      pausedProgress,
+      "running",
+      params.startedAt,
+    );
+    await sleep("15s");
   }
 }
 
@@ -538,24 +616,15 @@ async function deleteChunkStep(params: {
   };
 }
 
-async function buildReconciliationTargetsStep(seenKeys: string[]) {
+async function scanReconciliationPageStep(pageToken: string | null) {
   "use step";
   console.log(
-    `[liveMerchantSyncWorkflow] reconciling existing Merchant rows seenKeys=${seenKeys.length}`,
+    `[liveMerchantSyncWorkflow] reconciling Merchant page pageToken=${pageToken ?? "start"}`,
   );
-  const { listConfiguredDataSourceProducts } = await import(
+  const { listConfiguredDataSourceProductPage } = await import(
     "@/lib/google-merchant"
   );
-  const existingProducts = await listConfiguredDataSourceProducts();
-  const seenKeySet = new Set(seenKeys);
-  const targets = existingProducts.filter(
-    (target) => !seenKeySet.has(buildDeleteTargetKey(target)),
-  );
-
-  return {
-    existingProductsScanned: existingProducts.length,
-    targets,
-  };
+  return listConfiguredDataSourceProductPage(pageToken);
 }
 
 async function removeSucceededPendingDeletesStep(
@@ -876,6 +945,11 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      await waitForResumeIfPaused({
+        runId,
+        startedAt,
+        progress: scanningProgress,
+      });
       await publishWorkflowEvent(
         runId,
         {
@@ -995,7 +1069,15 @@ export async function liveMerchantSyncWorkflow(
     }
 
     if (input.mode === "full") {
-      const reconcilingProgress = createProgressSnapshot({
+      const seenKeySet = new Set(seenKeys);
+      const reconciliationTargets: MerchantDeleteTarget[] = [];
+      let reconciliationPageToken: string | null = null;
+      let merchantPagesScanned = 0;
+      let merchantRowsScanned = 0;
+      let merchantMatchedRows = 0;
+      let merchantDeleteTargets = 0;
+
+      let reconcilingProgress = createProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1010,6 +1092,10 @@ export async function liveMerchantSyncWorkflow(
         merchantCompleted: 0,
         merchantTotal: null,
         merchantErrors: merchant.errorCount,
+        merchantPagesScanned,
+        merchantRowsScanned,
+        merchantMatchedRows,
+        merchantDeleteTargets,
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
@@ -1024,16 +1110,72 @@ export async function liveMerchantSyncWorkflow(
         startedAt,
       );
 
-      const reconciliation = await buildReconciliationTargetsStep(seenKeys);
-      merchant.existingProductsScanned = reconciliation.existingProductsScanned;
-      merchant.reconciliationDeletes = reconciliation.targets.length;
+      while (true) {
+        await waitForResumeIfPaused({
+          runId,
+          startedAt,
+          progress: reconcilingProgress,
+        });
+        const page = await scanReconciliationPageStep(reconciliationPageToken);
+        reconciliationPageToken = page.nextPageToken;
+        merchantPagesScanned += 1;
+        merchantRowsScanned += page.rowsScanned;
+        merchantMatchedRows += page.matches.length;
+
+        const pageTargets = page.matches.filter(
+          (target) => !seenKeySet.has(buildDeleteTargetKey(target)),
+        );
+        merchantDeleteTargets += pageTargets.length;
+        reconciliationTargets.push(...pageTargets);
+
+        reconcilingProgress = createProgressSnapshot({
+          input,
+          startedAt,
+          chunkTargetProducts,
+          chunksCompleted,
+          totalProducts: context.totalProducts,
+          productsScanned: productsFetched,
+          pagesScanned,
+          stage: "uploading",
+          message: reconciliationPageToken
+            ? "Reconciling Merchant Center rows against the completed Shopify full scan."
+            : "Merchant reconciliation scan is complete. Preparing final delete batches.",
+          merchantPhase: "reconciling",
+          merchantCompleted: merchantMatchedRows,
+          merchantTotal: null,
+          merchantErrors: merchant.errorCount,
+          merchantPagesScanned,
+          merchantRowsScanned,
+          merchantMatchedRows,
+          merchantDeleteTargets,
+          lastChunkDurationMs,
+          averageChunkDurationMs,
+        });
+        await publishWorkflowEvent(
+          runId,
+          {
+            type: "progress",
+            progress: reconcilingProgress,
+          },
+          reconcilingProgress,
+          undefined,
+          startedAt,
+        );
+
+        if (!reconciliationPageToken) {
+          break;
+        }
+      }
+
+      merchant.existingProductsScanned = merchantMatchedRows;
+      merchant.reconciliationDeletes = reconciliationTargets.length;
 
       for (
         let index = 0;
-        index < reconciliation.targets.length;
+        index < reconciliationTargets.length;
         index += chunkTargetProducts
       ) {
-        const reconciliationChunk = reconciliation.targets.slice(
+        const reconciliationChunk = reconciliationTargets.slice(
           index,
           index + chunkTargetProducts,
         );
@@ -1050,10 +1192,19 @@ export async function liveMerchantSyncWorkflow(
             "Deleting Merchant Center rows missing from the completed full catalog.",
           merchantPhase: "deletes",
           merchantCompleted: index,
-          merchantTotal: reconciliation.targets.length,
+          merchantTotal: reconciliationTargets.length,
           merchantErrors: merchant.errorCount,
+          merchantPagesScanned,
+          merchantRowsScanned,
+          merchantMatchedRows,
+          merchantDeleteTargets,
           lastChunkDurationMs,
           averageChunkDurationMs,
+        });
+        await waitForResumeIfPaused({
+          runId,
+          startedAt,
+          progress: progressBase,
         });
         const deleteBatch = await deleteChunkStep({
           runId,
@@ -1099,8 +1250,17 @@ export async function liveMerchantSyncWorkflow(
         merchantCompleted: 0,
         merchantTotal: pendingDeleteScope.targets.length,
         merchantErrors: merchant.errorCount,
+        merchantPagesScanned: 0,
+        merchantRowsScanned: 0,
+        merchantMatchedRows: 0,
+        merchantDeleteTargets: pendingDeleteScope.targets.length,
         lastChunkDurationMs,
         averageChunkDurationMs,
+      });
+      await waitForResumeIfPaused({
+        runId,
+        startedAt,
+        progress: progressBase,
       });
       const deleteBatch = await deleteChunkStep({
         runId,
