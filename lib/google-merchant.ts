@@ -191,6 +191,21 @@ class MerchantApiError extends Error {
 
 let cachedAccessToken: CachedAccessToken | null = null;
 
+function isBenignDeleteError(error: unknown) {
+  if (!(error instanceof MerchantApiError)) {
+    return false;
+  }
+
+  if (error.status === 404) {
+    return true;
+  }
+
+  return (
+    error.status === 400 &&
+    error.message.includes("does not belong to the given data source")
+  );
+}
+
 function getGoogleAuthMode(): GoogleAuthMode | null {
   if (
     hasEnvValue(env.googleClientId) &&
@@ -800,7 +815,7 @@ export async function deleteMerchantProductBatch(params: {
         succeeded += 1;
         deleteTargetKeysSucceeded.push(buildDeleteKey(target));
       } catch (error) {
-        if (error instanceof MerchantApiError && error.status === 404) {
+        if (isBenignDeleteError(error)) {
           succeeded += 1;
           deleteTargetKeysSucceeded.push(buildDeleteKey(target));
           return;

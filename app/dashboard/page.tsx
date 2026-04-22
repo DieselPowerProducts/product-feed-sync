@@ -447,7 +447,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <p className="text-sm text-muted">
             Completed live syncs keep their downloadable feed, validation, and
             excluded files here. Failed runs still keep their sample details so
-            you can inspect what happened.
+            you can inspect what happened. Counts reflect Shopify products
+            scanned and GMC-ready records prepared, not just net-new Merchant
+            products.
           </p>
         </div>
 
@@ -553,11 +555,15 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         ) : null}
                       </td>
                       <td className="px-4 py-4 text-muted">
-                        <p>Products: {entry.stats.productsFetched}</p>
-                        <p className="mt-2">Records: {entry.stats.recordsPrepared}</p>
-                        <p className="mt-2">Excluded: {entry.stats.excluded}</p>
+                        <p>Shopify scanned: {entry.stats.productsFetched}</p>
                         <p className="mt-2">
-                          Validation: {entry.stats.validationIssues ?? 0}
+                          GMC records: {entry.stats.recordsPrepared}
+                        </p>
+                        <p className="mt-2">
+                          Excluded/delete scope: {entry.stats.excluded}
+                        </p>
+                        <p className="mt-2">
+                          Validation blocked: {entry.stats.validationIssues ?? 0}
                         </p>
                       </td>
                       <td className="px-4 py-4 text-muted">
