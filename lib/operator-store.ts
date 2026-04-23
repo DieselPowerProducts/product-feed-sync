@@ -103,6 +103,7 @@ export interface SyncHistoryEntry {
 export interface LiveOfferIndexRecord {
   dataSourceName: string;
   keys: string[];
+  fingerprints: Record<string, string>;
   updatedAt: string;
   source: "merchant_scan" | "full_success" | "delta_success";
 }
@@ -260,6 +261,11 @@ function sanitizeLiveOfferIndex(
 
   const seenKeys = new Set<string>();
   const keys: string[] = [];
+  const inputFingerprints =
+    input.fingerprints && typeof input.fingerprints === "object"
+      ? input.fingerprints
+      : {};
+  const fingerprints: Record<string, string> = {};
 
   for (const value of input.keys ?? []) {
     if (typeof value !== "string" || !value || seenKeys.has(value)) {
@@ -269,6 +275,11 @@ function sanitizeLiveOfferIndex(
     seenKeys.add(value);
     keys.push(value);
 
+    const fingerprint = inputFingerprints[value];
+    if (typeof fingerprint === "string" && fingerprint.length > 0) {
+      fingerprints[value] = fingerprint;
+    }
+
     if (keys.length >= LIVE_OFFER_INDEX_LIMIT) {
       break;
     }
@@ -277,6 +288,7 @@ function sanitizeLiveOfferIndex(
   return {
     dataSourceName: input.dataSourceName,
     keys,
+    fingerprints,
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     source:
       input.source === "full_success" || input.source === "delta_success"
@@ -1115,11 +1127,13 @@ export async function getLiveOfferIndex(dataSourceName: string) {
 export async function saveLiveOfferIndex(params: {
   dataSourceName: string;
   keys: string[];
+  fingerprints?: Record<string, string>;
   source: LiveOfferIndexRecord["source"];
 }) {
   const index = sanitizeLiveOfferIndex({
     dataSourceName: params.dataSourceName,
     keys: params.keys,
+    fingerprints: params.fingerprints,
     updatedAt: new Date().toISOString(),
     source: params.source,
   });

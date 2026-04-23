@@ -19,6 +19,7 @@ import type {
   SyncRunArtifact,
   SyncRunResult,
 } from "@/lib/sync";
+import { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import { getConfigurationStatus } from "@/lib/env";
 
 const DEFAULT_PREVIEW_LIMIT = 5;
@@ -26,6 +27,7 @@ const LIVE_SYNC_CHUNK_PRODUCT_TARGET = 1500;
 const INCLUDED_SAMPLE_LIMIT = 50;
 const EXCLUDED_SAMPLE_LIMIT = 250;
 const MERCHANT_ERROR_SAMPLE_LIMIT = 50;
+const LARGE_DELTA_PRODUCT_LIMIT_WITHOUT_FINGERPRINTS = 2500;
 
 export interface LiveMerchantSyncWorkflowInput {
   mode: "delta" | "full";
@@ -784,6 +786,8 @@ async function persistSuccessfulRunStep(params: {
   merchant: MerchantCatalogSyncSummary;
   pendingDeleteCount: number;
   liveOfferKeys: string[];
+  liveOfferFingerprints: Record<string, string>;
+  unchangedRecordsSkipped: number;
   liveOfferIndexDataSourceName: string;
 }) {
   "use step";
@@ -819,6 +823,11 @@ async function persistSuccessfulRunStep(params: {
   if (params.pendingDeleteCount > 0) {
     notes.unshift(
       `${params.pendingDeleteCount} hard-deleted Shopify variant(s) were queued from webhook events and included in this run's Merchant delete scope.`,
+    );
+  }
+  if (params.unchangedRecordsSkipped > 0) {
+    notes.unshift(
+      `Delta fingerprint filtering skipped ${params.unchangedRecordsSkipped.toLocaleString()} unchanged Merchant row(s) before calling the Merchant API.`,
     );
   }
 
@@ -908,11 +917,18 @@ async function persistSuccessfulRunStep(params: {
     merchant: params.merchant,
   } satisfies SyncRunResult;
 
-  await saveLiveOfferIndex({
-    dataSourceName: params.liveOfferIndexDataSourceName,
-    keys: params.liveOfferKeys,
-    source: params.input.mode === "full" ? "full_success" : "delta_success",
-  });
+  if (params.merchant.errorCount === 0) {
+    await saveLiveOfferIndex({
+      dataSourceName: params.liveOfferIndexDataSourceName,
+      keys: params.liveOfferKeys,
+      fingerprints: params.liveOfferFingerprints,
+      source: params.input.mode === "full" ? "full_success" : "delta_success",
+    });
+  } else {
+    notes.push(
+      "The live offer index was not advanced because this run had Merchant API write errors.",
+    );
+  }
   await writePreviewExportArtifact(params.exportArtifactId, finalizedExport);
 
   const artifactId = result.startedAt.replaceAll(":", "-");
@@ -1078,16 +1094,30 @@ export async function liveMerchantSyncWorkflow(
     });
     const merchantIdentity = await loadMerchantIdentityStep();
     const pendingDeleteScope = await loadPendingDeleteTargetsStep();
-    const liveOfferKeys =
+    const liveOfferIndex =
       input.mode === "delta"
-        ? new Set(
-            (
-              await loadOrSeedLiveOfferIndexStep(
-                merchantIdentity.dataSourceName,
-              )
-            ).keys,
-          )
+        ? await loadOrSeedLiveOfferIndexStep(merchantIdentity.dataSourceName)
         : null;
+    const liveOfferKeys =
+      input.mode === "delta" ? new Set(liveOfferIndex?.keys ?? []) : null;
+    const liveOfferFingerprints =
+      input.mode === "delta"
+        ? { ...(liveOfferIndex?.fingerprints ?? {}) }
+        : null;
+    const fingerprintBaselineCount = liveOfferFingerprints
+      ? Object.keys(liveOfferFingerprints).length
+      : 0;
+
+    if (
+      input.mode === "delta" &&
+      fingerprintBaselineCount === 0 &&
+      typeof context.totalProducts === "number" &&
+      context.totalProducts > LARGE_DELTA_PRODUCT_LIMIT_WITHOUT_FINGERPRINTS
+    ) {
+      throw new Error(
+        `Delta window contains ${context.totalProducts.toLocaleString()} Shopify products, but no feed fingerprint baseline exists yet. This run was stopped before Merchant writes to avoid an accidental broad daily upload.`,
+      );
+    }
     const merchant = createMerchantSummary(merchantIdentity);
     await initializeExportArtifactStep({
       exportArtifactId,
@@ -1102,12 +1132,14 @@ export async function liveMerchantSyncWorkflow(
     const deleteSample: DeletePreviewSample[] = [];
     const deletePreviewKeys: Record<string, true> = {};
     const seenKeys: string[] = [];
+    const seenFingerprints: Record<string, string> = {};
     let cursor: string | null = null;
     let scanCompleted = false;
     let pagesScanned = 0;
     let productsFetched = 0;
     let variantsConsidered = 0;
     let recordsPrepared = 0;
+    let unchangedRecordsSkipped = 0;
     let chunksCompleted = 0;
     let lastChunkDurationMs: number | null = null;
     let averageChunkDurationMs: number | null = null;
@@ -1124,7 +1156,9 @@ export async function liveMerchantSyncWorkflow(
       message:
         input.mode === "full"
           ? "Counting Shopify products and preparing chunked full sync."
-          : "Counting Shopify products changed in the delta window.",
+          : fingerprintBaselineCount > 0
+            ? "Counting Shopify products touched in the delta window. Feed fingerprints will skip unchanged Merchant rows before writing."
+            : "Counting Shopify products changed in the delta window.",
       lastChunkDurationMs,
       averageChunkDurationMs,
     });
@@ -1150,9 +1184,13 @@ export async function liveMerchantSyncWorkflow(
         pagesScanned,
         stage: "scanning",
         message:
-          chunksCompleted === 0
-            ? `Scanning the first chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products.`
-            : `Scanning the next chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products.`,
+          input.mode === "delta" && fingerprintBaselineCount > 0
+            ? chunksCompleted === 0
+              ? `Scanning the first chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify candidate products; unchanged GMC payloads will be skipped.`
+              : `Scanning the next chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify candidate products; unchanged GMC payloads will be skipped.`
+            : chunksCompleted === 0
+              ? `Scanning the first chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products.`
+              : `Scanning the next chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products.`,
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
@@ -1193,7 +1231,31 @@ export async function liveMerchantSyncWorkflow(
         excludedRows: chunk.excludedRows,
         validationRows: chunk.validationRows,
       });
-      seenKeys.push(...chunk.rows.map((row) => buildDeleteTargetKey(row)));
+      const chunkFingerprints = new Map<string, string>();
+      for (const row of chunk.rows) {
+        const key = buildDeleteTargetKey(row);
+        const fingerprint = buildFeedRecordFingerprint(row);
+        chunkFingerprints.set(key, fingerprint);
+        seenFingerprints[key] = fingerprint;
+      }
+
+      seenKeys.push(...chunkFingerprints.keys());
+      const rowsToUpsert =
+        input.mode === "delta" && liveOfferFingerprints
+          ? chunk.rows.filter((row) => {
+              const key = buildDeleteTargetKey(row);
+              const fingerprint =
+                chunkFingerprints.get(key) ?? buildFeedRecordFingerprint(row);
+
+              if (liveOfferFingerprints[key] === fingerprint) {
+                unchangedRecordsSkipped += 1;
+                return false;
+              }
+
+              return true;
+            })
+          : chunk.rows;
+      const skippedThisChunk = chunk.rows.length - rowsToUpsert.length;
       const filteredChunkDeletes =
         input.mode === "delta" && liveOfferKeys
           ? filterLiveDeleteTargets({
@@ -1215,7 +1277,9 @@ export async function liveMerchantSyncWorkflow(
         productsScanned: productsFetched,
         pagesScanned,
         stage: "uploading",
-        message: "Starting Merchant Center writes for the current chunk.",
+        message: skippedThisChunk
+          ? `Prepared ${chunk.rows.length.toLocaleString()} Merchant row(s); ${skippedThisChunk.toLocaleString()} unchanged row(s) will be skipped before writing this chunk.`
+          : "Starting Merchant Center writes for the current chunk.",
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
@@ -1224,7 +1288,7 @@ export async function liveMerchantSyncWorkflow(
         runId,
         startedAt,
         progressBase,
-        records: chunk.rows,
+        records: rowsToUpsert,
       });
       merchant.upsertsAttempted += upsertBatch.summary.attempted;
       merchant.upsertsSucceeded += upsertBatch.summary.succeeded;
@@ -1236,6 +1300,13 @@ export async function liveMerchantSyncWorkflow(
       if (liveOfferKeys) {
         chunk.rows.forEach((row) => {
           liveOfferKeys.add(buildDeleteTargetKey(row));
+        });
+      }
+      if (liveOfferFingerprints) {
+        chunk.rows.forEach((row) => {
+          const key = buildDeleteTargetKey(row);
+          liveOfferFingerprints[key] =
+            chunkFingerprints.get(key) ?? buildFeedRecordFingerprint(row);
         });
       }
 
@@ -1269,6 +1340,11 @@ export async function liveMerchantSyncWorkflow(
         if (liveOfferKeys) {
           deleteBatch.summary.deleteTargetKeysSucceeded.forEach((key) => {
             liveOfferKeys.delete(key);
+          });
+        }
+        if (liveOfferFingerprints) {
+          deleteBatch.summary.deleteTargetKeysSucceeded.forEach((key) => {
+            delete liveOfferFingerprints[key];
           });
         }
       }
@@ -1537,6 +1613,11 @@ export async function liveMerchantSyncWorkflow(
           liveOfferKeys.delete(key);
         });
       }
+      if (liveOfferFingerprints) {
+        deleteBatch.summary.deleteTargetKeysSucceeded.forEach((key) => {
+          delete liveOfferFingerprints[key];
+        });
+      }
 
       if (deleteBatch.summary.deleteTargetKeysSucceeded.length) {
         await removeSucceededPendingDeletesStep(
@@ -1573,6 +1654,9 @@ export async function liveMerchantSyncWorkflow(
         input.mode === "full"
           ? Array.from(new Set(seenKeys))
           : Array.from(liveOfferKeys ?? new Set<string>()),
+      liveOfferFingerprints:
+        input.mode === "full" ? seenFingerprints : liveOfferFingerprints ?? {},
+      unchangedRecordsSkipped,
       liveOfferIndexDataSourceName: merchantIdentity.dataSourceName,
     });
 

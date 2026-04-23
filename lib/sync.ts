@@ -20,6 +20,7 @@ import {
   type SyncSettings,
 } from "@/lib/operator-store";
 import { buildShopifyOfferId, parseShopifyOfferId } from "@/lib/shopify-offer-id";
+export { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import {
   fetchShopConnectionDetails,
   getConfiguredShopDomain,
