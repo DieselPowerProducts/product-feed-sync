@@ -42,7 +42,7 @@ export async function GET() {
     timestamp: now.toISOString(),
     cadence: {
       cronSchedulesUtc: {
-        sync: ["0 9 * * *"],
+        sync: ["0 9 * * *", "0 10 * * *", "0 11 * * *", "0 12 * * *"],
       },
       anchorDate: settings.anchorDate,
       deltaIntervalDays: settings.deltaIntervalDays,
