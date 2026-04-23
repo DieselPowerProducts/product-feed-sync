@@ -54,6 +54,7 @@ const RETAINED_SCHEDULED_SYNC_EXPORTS_PER_MODE: Record<
   delta: 5,
   full: 1,
 };
+const PENDING_UPSERT_LIMIT = 25_000;
 const PENDING_DELETE_LIMIT = 5000;
 
 export type SyncHistoryPurpose = "sync" | "test-save";
@@ -147,6 +148,20 @@ export interface PendingShopifyDeleteRecord {
   shopDomain?: string | null;
 }
 
+export interface PendingShopifyUpsertRecord {
+  productId: string;
+  title: string;
+  handle: string;
+  reason: "shopify_create" | "shopify_update";
+  queuedAt: string;
+  source: "shopify_webhook";
+  topic: "products/create" | "products/update";
+  webhookId?: string | null;
+  eventId?: string | null;
+  triggeredAt?: string | null;
+  shopDomain?: string | null;
+}
+
 export interface ActiveSyncRunState {
   runId: string;
   startedAt: string;
@@ -180,6 +195,7 @@ interface BootstrapState {
 interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
+  pendingUpserts: PendingShopifyUpsertRecord[];
   pendingDeletes: PendingShopifyDeleteRecord[];
   cronInvocations: CronInvocationEntry[];
   bootstrap: BootstrapState;
@@ -211,6 +227,7 @@ function defaultState(): OperatorState {
   return {
     settings: defaultSettings(),
     history: [],
+    pendingUpserts: [],
     pendingDeletes: [],
     cronInvocations: [],
     bootstrap: {
@@ -359,6 +376,29 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   return {
     settings: sanitizeSettings(input?.settings),
     history,
+    pendingUpserts: Array.isArray(input?.pendingUpserts)
+      ? input.pendingUpserts
+          .slice(0, PENDING_UPSERT_LIMIT)
+          .map((entry) => ({
+            productId: entry.productId,
+            title: entry.title ?? "",
+            handle: entry.handle ?? "",
+            reason:
+              entry.reason === "shopify_create"
+                ? "shopify_create"
+                : "shopify_update",
+            queuedAt: entry.queuedAt ?? new Date().toISOString(),
+            source: "shopify_webhook",
+            topic:
+              entry.topic === "products/create"
+                ? "products/create"
+                : "products/update",
+            webhookId: entry.webhookId ?? null,
+            eventId: entry.eventId ?? null,
+            triggeredAt: entry.triggeredAt ?? null,
+            shopDomain: entry.shopDomain ?? null,
+          }))
+      : [],
     pendingDeletes: Array.isArray(input?.pendingDeletes)
       ? input.pendingDeletes
           .slice(0, PENDING_DELETE_LIMIT)
@@ -480,6 +520,12 @@ function buildPendingDeleteKey(
   target: Pick<PendingShopifyDeleteRecord, "contentLanguage" | "feedLabel" | "offerId">,
 ) {
   return `${target.contentLanguage}~${target.feedLabel}~${target.offerId}`;
+}
+
+function buildPendingUpsertKey(
+  target: Pick<PendingShopifyUpsertRecord, "productId">,
+) {
+  return target.productId;
 }
 
 function getRunArtifactBlobPath(id: string) {
@@ -1019,6 +1065,80 @@ export async function getPendingShopifyDeletes() {
   return [...state.pendingDeletes].sort((left, right) =>
     left.queuedAt.localeCompare(right.queuedAt),
   );
+}
+
+export async function getPendingShopifyUpserts() {
+  const state = await readState();
+
+  return [...state.pendingUpserts].sort((left, right) =>
+    left.queuedAt.localeCompare(right.queuedAt),
+  );
+}
+
+export async function appendPendingShopifyUpserts(
+  entries: PendingShopifyUpsertRecord[],
+) {
+  if (!entries.length) {
+    return [];
+  }
+
+  const state = await readState();
+  const pendingByKey = new Map(
+    state.pendingUpserts.map((entry) => [buildPendingUpsertKey(entry), entry]),
+  );
+
+  for (const entry of entries) {
+    pendingByKey.set(buildPendingUpsertKey(entry), entry);
+  }
+
+  const pendingUpserts = Array.from(pendingByKey.values())
+    .sort((left, right) => right.queuedAt.localeCompare(left.queuedAt))
+    .slice(0, PENDING_UPSERT_LIMIT);
+
+  await writeState({
+    ...state,
+    pendingUpserts,
+  });
+
+  return pendingUpserts;
+}
+
+export async function removePendingShopifyUpserts(
+  productIds: string[],
+  options?: { queuedAtLte?: string | null },
+) {
+  if (!productIds.length) {
+    return [];
+  }
+
+  const state = await readState();
+  const productIdSet = new Set(productIds);
+  const cutoff =
+    options?.queuedAtLte && !Number.isNaN(Date.parse(options.queuedAtLte))
+      ? options.queuedAtLte
+      : null;
+  const removed: PendingShopifyUpsertRecord[] = [];
+  const pendingUpserts = state.pendingUpserts.filter((entry) => {
+    if (!productIdSet.has(entry.productId)) {
+      return true;
+    }
+
+    if (cutoff && entry.queuedAt > cutoff) {
+      return true;
+    }
+
+    removed.push(entry);
+    return false;
+  });
+
+  if (removed.length) {
+    await writeState({
+      ...state,
+      pendingUpserts,
+    });
+  }
+
+  return removed;
 }
 
 export async function appendPendingShopifyDeletes(

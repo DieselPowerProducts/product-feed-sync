@@ -9,12 +9,14 @@ import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
   getPendingShopifyDeletes,
-  getLatestSuccessfulLiveSyncHistory,
+  getPendingShopifyUpserts,
   removePendingShopifyDeletes,
+  removePendingShopifyUpserts,
   getSyncSettings,
   writePreviewExportArtifact,
   writeRunArtifact,
   type PendingShopifyDeleteRecord,
+  type PendingShopifyUpsertRecord,
   type SyncHistoryPurpose,
   type SyncHistoryEntry,
   type SyncSettings,
@@ -46,8 +48,6 @@ const VALID_GTIN_LENGTHS = new Set([8, 12, 13, 14]);
 const GOOGLE_MPN_METAFIELD_NAMESPACE = "mm-google-shopping";
 const GOOGLE_MPN_METAFIELD_KEY = "mpn";
 const SHOPIFY_REFERENCE_GID_PATTERN = /gid:\/\/shopify\//i;
-const DELTA_SYNC_OVERLAP_MINUTES = 5;
-const DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS = 8;
 
 const SHOPIFY_REFERENCE_METAFIELD_FIELDS = `
           value
@@ -487,7 +487,12 @@ export interface DeletePreviewSample extends ExcludedPreviewSample {
 export interface SyncSearchPlan {
   query: string;
   lookbackStart: string | null;
-  source: "full_catalog" | "live_sync_checkpoint" | "lookback_fallback";
+  source:
+    | "full_catalog"
+    | "live_sync_checkpoint"
+    | "lookback_fallback"
+    | "webhook_queue";
+  productIds?: string[];
   notes: string[];
 }
 
@@ -1598,6 +1603,15 @@ export function buildSyncScope(
       : "Shopify products are sampled across all statuses from the full catalog for previewing.";
   }
 
+  if (searchPlan.source === "webhook_queue") {
+    const queuedCount = searchPlan.productIds?.length ?? 0;
+    return queuedCount > 0
+      ? exhaustive
+        ? `${queuedCount.toLocaleString()} Shopify products queued from create/update webhooks are scanned exhaustively so Merchant Center only receives product-level delta candidates instead of a broad updated_at sweep.`
+        : `${queuedCount.toLocaleString()} Shopify products queued from create/update webhooks are sampled for delta preview.`
+      : "No queued Shopify create/update webhooks are pending, so the delta run can skip product upserts unless webhook-driven deletes are waiting.";
+  }
+
   if (searchPlan.source === "live_sync_checkpoint" && searchPlan.lookbackStart) {
     return exhaustive
       ? `Shopify products changed after ${searchPlan.lookbackStart} are scanned exhaustively using the last successful live-sync checkpoint, including inactive or excluded products that now need Merchant deletes.`
@@ -1605,21 +1619,19 @@ export function buildSyncScope(
   }
 
   return exhaustive
-    ? `Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day window are scanned exhaustively because no live-sync checkpoint exists yet.`
-    : `Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day window are sampled because no live-sync checkpoint exists yet.`;
+    ? "Shopify delta scope is using a legacy fallback query instead of the webhook queue."
+    : "Shopify delta preview is using a legacy fallback query instead of the webhook queue.";
 }
 
 async function buildSearchQuery(
   mode: Exclude<SyncMode, "idle">,
   settings: SyncSettings,
-  options?: {
+  _options?: {
     dryRun: boolean;
     now?: Date;
     allowDeltaFallback?: boolean;
   },
 ): Promise<SyncSearchPlan> {
-  const now = options?.now ?? new Date();
-
   if (mode === "full") {
     return {
       query: "",
@@ -1631,40 +1643,31 @@ async function buildSearchQuery(
     };
   }
 
-  const latestLiveSync = await getLatestSuccessfulLiveSyncHistory();
+  const pendingUpserts = await getPendingShopifyUpserts();
 
-  if (latestLiveSync) {
-    const checkpointStart = new Date(latestLiveSync.startedAt);
-    const lookbackStart = new Date(
-      checkpointStart.getTime() - DELTA_SYNC_OVERLAP_MINUTES * MS_PER_MINUTE,
+  if (pendingUpserts.length > 0) {
+    const productIds = Array.from(
+      new Set(pendingUpserts.map((entry) => entry.productId)),
     );
 
     return {
-      query: `updated_at:>'${lookbackStart.toISOString()}'`,
-      lookbackStart: lookbackStart.toISOString(),
-      source: "live_sync_checkpoint",
+      query: "",
+      lookbackStart: null,
+      source: "webhook_queue",
+      productIds,
       notes: [
-        `Delta scope uses the last successful live sync at ${latestLiveSync.startedAt} with a ${DELTA_SYNC_OVERLAP_MINUTES}-minute overlap safeguard.`,
+        `Delta scope uses ${productIds.length.toLocaleString()} Shopify products queued by create/update webhooks instead of Shopify updated_at.`,
       ],
     };
   }
 
-  if (!options?.allowDeltaFallback) {
-    throw new Error(
-      "Production-accurate delta requires a successful live sync baseline. Run a live full sync first so Merchant Center has a complete catalog before deltas start.",
-    );
-  }
-
-  const lookbackStart = new Date(
-    now.getTime() - DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS * MS_PER_DAY,
-  );
-
   return {
-    query: `updated_at:>'${lookbackStart.toISOString()}'`,
-    lookbackStart: lookbackStart.toISOString(),
-    source: "lookback_fallback",
+    query: "",
+    lookbackStart: null,
+    source: "webhook_queue",
+    productIds: [],
     notes: [
-      `No successful live sync baseline exists yet, so this delta preview fell back to the last ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS} days of Shopify changes.`,
+      "No Shopify create/update webhooks are queued right now, so the delta run can skip product upserts and only process webhook-driven deletes if any are pending.",
     ],
   };
 }
@@ -1933,6 +1936,218 @@ async function fetchAllProductVariants(params: {
   return variants;
 }
 
+function buildShopifyProductGid(productId: string) {
+  return `gid://shopify/Product/${productId}`;
+}
+
+async function fetchProductDetailsByLegacyIds(params: {
+  shop: string;
+  accessToken: string;
+  productIds: string[];
+}) {
+  if (!params.productIds.length) {
+    return [] as ShopifyProductNode[];
+  }
+
+  const detailPayloads = await Promise.all(
+    chunkArray(
+      params.productIds.map((productId) => buildShopifyProductGid(productId)),
+      DETAIL_BATCH_SIZE,
+    ).map((batchIds) =>
+      runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
+        shop: params.shop,
+        accessToken: params.accessToken,
+        query: SHOPIFY_PRODUCT_DETAILS_QUERY,
+        variables: {
+          ids: batchIds,
+          mediaLimit: DETAIL_MEDIA_LIMIT,
+          variantLimit: DETAIL_VARIANT_PAGE_SIZE,
+        },
+      }),
+    ),
+  );
+
+  return detailPayloads.flatMap(
+    (detailPayload) =>
+      detailPayload.nodes?.filter(
+        (product): product is ShopifyProductNode => Boolean(product),
+      ) ?? [],
+  );
+}
+
+async function processQueuedProductIds(params: {
+  context: SyncExecutionContext;
+  productIds: string[];
+  artifactSampleLimit: number;
+  collectAllRecords?: boolean;
+  captureDeleteCandidates?: boolean;
+}) {
+  const rows: FeedPreviewRecord[] = [];
+  const includedSamples: FeedPreviewRecord[] = [];
+  const excludedRows: ExcludedPreviewSample[] = [];
+  const validationRows: ExcludedPreviewSample[] = [];
+  const excludedSamples: ExcludedPreviewSample[] = [];
+  const validationSamples: ExcludedPreviewSample[] = [];
+  const deleteCandidates: MerchantDeleteTarget[] = [];
+  const deleteSamples: DeletePreviewSample[] = [];
+  const exclusions: Record<string, number> = {};
+  let productsEvaluated = 0;
+  let variantsConsidered = 0;
+  let recordsPrepared = 0;
+
+  const detailedProducts = await fetchProductDetailsByLegacyIds({
+    shop: params.context.shop,
+    accessToken: params.context.accessToken,
+    productIds: params.productIds,
+  });
+
+  for (const product of detailedProducts) {
+    const productId = resolveLegacyId(product.legacyResourceId, product.id);
+    const productMediaUrls = collectMediaUrls(product);
+    const productExclusionReason = findProductExclusionReason(product);
+    const initialVariants = connectionNodes<ShopifyVariantNode>(product.variants);
+    const variants = product.variants?.pageInfo?.hasNextPage
+      ? await fetchAllProductVariants({
+          shop: params.context.shop,
+          accessToken: params.context.accessToken,
+          productId: product.id,
+          initialVariants,
+          afterCursor: product.variants.pageInfo.endCursor ?? null,
+        })
+      : initialVariants;
+
+    if (productExclusionReason) {
+      if (variants.length === 0) {
+        const excludedRow = {
+          reason: productExclusionReason,
+          productId,
+          variantId: null,
+          offerId: null,
+          handle: product.handle,
+          title: product.title,
+          variantTitle: null,
+          sku: null,
+          link: product.onlineStoreUrl ?? null,
+        } satisfies ExcludedPreviewSample;
+        incrementCounter(exclusions, productExclusionReason);
+        collectExcludedSample(excludedSamples, excludedRow);
+        excludedRows.push(excludedRow);
+      }
+
+      for (const variant of variants) {
+        variantsConsidered += 1;
+        const deleteTarget = buildDeleteTarget({
+          product,
+          variant,
+          reason: productExclusionReason,
+        });
+        const excludedRow = {
+          reason: productExclusionReason,
+          productId,
+          variantId: deleteTarget.variantId ?? null,
+          offerId: deleteTarget.offerId,
+          handle: product.handle,
+          title: product.title,
+          variantTitle: variant.title,
+          sku: variant.sku ?? null,
+          link: product.onlineStoreUrl ?? null,
+        } satisfies ExcludedPreviewSample;
+
+        incrementCounter(exclusions, productExclusionReason);
+        collectExcludedSample(excludedSamples, excludedRow);
+        excludedRows.push(excludedRow);
+        if (params.captureDeleteCandidates) {
+          deleteCandidates.push(deleteTarget);
+          collectExcludedSample(deleteSamples, {
+            ...excludedRow,
+            source: "shopify_scan",
+          } satisfies DeletePreviewSample);
+        }
+      }
+
+      productsEvaluated += 1;
+      continue;
+    }
+
+    for (const variant of variants) {
+      variantsConsidered += 1;
+
+      const record = buildPreviewRecord({
+        product,
+        variant,
+        totalVariants: variants.length,
+        storefrontBaseUrl: params.context.storefrontBaseUrl,
+        productMediaUrls,
+      });
+
+      if ("excluded" in record) {
+        const excludedRow = {
+          reason: record.excluded,
+          details: record.details,
+          productId,
+          variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
+          offerId: buildShopifyOfferId(
+            productId,
+            resolveLegacyId(variant.legacyResourceId, variant.id),
+          ),
+          handle: product.handle,
+          title: product.title,
+          variantTitle: variant.title,
+          sku: variant.sku ?? null,
+          link: record.link ?? null,
+        } satisfies ExcludedPreviewSample;
+        incrementCounter(exclusions, record.excluded);
+        collectExcludedSample(excludedSamples, excludedRow);
+        excludedRows.push(excludedRow);
+        if (isValidationExclusionReason(record.excluded)) {
+          collectExcludedSample(validationSamples, excludedRow);
+          validationRows.push(excludedRow);
+        }
+        if (params.captureDeleteCandidates) {
+          const deleteTarget = buildDeleteTarget({
+            product,
+            variant,
+            reason: record.excluded,
+          });
+          deleteCandidates.push(deleteTarget);
+          collectExcludedSample(deleteSamples, {
+            ...excludedRow,
+            source: "shopify_scan",
+          } satisfies DeletePreviewSample);
+        }
+        continue;
+      }
+
+      recordsPrepared += 1;
+
+      if (params.collectAllRecords) {
+        rows.push(record);
+      }
+
+      if (includedSamples.length < params.artifactSampleLimit) {
+        includedSamples.push(record);
+      }
+    }
+
+    productsEvaluated += 1;
+  }
+
+  return {
+    rows,
+    includedSamples,
+    excludedRows,
+    validationRows,
+    excludedSamples,
+    validationSamples,
+    deleteCandidates,
+    deleteSamples,
+    exclusions,
+    productsEvaluated,
+    variantsConsidered,
+    recordsPrepared,
+  };
+}
+
 export async function prepareSyncExecutionContext(params: {
   mode: Exclude<SyncMode, "idle">;
   settings: SyncSettings;
@@ -1966,21 +2181,26 @@ export async function prepareSyncExecutionContext(params: {
   const storefrontBaseUrl = connection.connected
     ? connection.shop?.primaryDomainUrl ?? null
     : null;
-  let totalProducts: number | null = null;
+  let totalProducts: number | null =
+    searchPlan.source === "webhook_queue"
+      ? searchPlan.productIds?.length ?? 0
+      : null;
 
-  try {
-    const countPayload = await runShopifyAdminGraphql<ShopifyProductsCountPayload>({
-      shop,
-      accessToken: token.accessToken,
-      query: SHOPIFY_PRODUCTS_COUNT_QUERY,
-      variables: {
-        query: searchPlan.query,
-      },
-    });
+  if (searchPlan.source !== "webhook_queue") {
+    try {
+      const countPayload = await runShopifyAdminGraphql<ShopifyProductsCountPayload>({
+        shop,
+        accessToken: token.accessToken,
+        query: SHOPIFY_PRODUCTS_COUNT_QUERY,
+        variables: {
+          query: searchPlan.query,
+        },
+      });
 
-    totalProducts = countPayload.productsCount?.count ?? null;
-  } catch {
-    totalProducts = null;
+      totalProducts = countPayload.productsCount?.count ?? null;
+    } catch {
+      totalProducts = null;
+    }
   }
 
   return {
@@ -2026,6 +2246,68 @@ export async function scanSyncExecutionChunk(params: {
   let recordsPrepared = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
+
+  if (params.context.searchPlan.source === "webhook_queue") {
+    const queuedProductIds = params.context.searchPlan.productIds ?? [];
+    const startIndex =
+      cursor && !Number.isNaN(Number.parseInt(cursor, 10))
+        ? Number.parseInt(cursor, 10)
+        : 0;
+    const chunkProductIds = queuedProductIds.slice(
+      startIndex,
+      startIndex + maxProducts,
+    );
+
+    if (chunkProductIds.length === 0) {
+      return {
+        nextCursor: null,
+        scanCompleted: true,
+        pagesScanned: 0,
+        productsFetched: 0,
+        productsEvaluated: 0,
+        variantsConsidered: 0,
+        recordsPrepared: 0,
+        rows,
+        includedSamples,
+        excludedRows,
+        validationRows,
+        excludedSamples,
+        validationSamples,
+        deleteCandidates,
+        deleteSamples,
+        exclusions,
+      } satisfies SyncChunkScanResult;
+    }
+
+    const processed = await processQueuedProductIds({
+      context: params.context,
+      productIds: chunkProductIds,
+      artifactSampleLimit,
+      collectAllRecords: params.collectAllRecords,
+      captureDeleteCandidates: params.captureDeleteCandidates,
+    });
+    const nextIndex = startIndex + chunkProductIds.length;
+
+    return {
+      nextCursor:
+        nextIndex < queuedProductIds.length ? String(nextIndex) : null,
+      scanCompleted: nextIndex >= queuedProductIds.length,
+      pagesScanned: 1,
+      productsFetched: chunkProductIds.length,
+      productsEvaluated: processed.productsEvaluated,
+      variantsConsidered: processed.variantsConsidered,
+      recordsPrepared: processed.recordsPrepared,
+      rows: processed.rows,
+      includedSamples: processed.includedSamples,
+      excludedRows: processed.excludedRows,
+      validationRows: processed.validationRows,
+      excludedSamples: processed.excludedSamples,
+      validationSamples: processed.validationSamples,
+      deleteCandidates: processed.deleteCandidates,
+      deleteSamples: processed.deleteSamples,
+      exclusions: processed.exclusions,
+    } satisfies SyncChunkScanResult;
+  }
 
   while (productsFetched < maxProducts) {
     const payload: ShopifyFeedProductsPayload =
@@ -2273,6 +2555,37 @@ export async function scanSyncExecutionChunk(params: {
   } satisfies SyncChunkScanResult;
 }
 
+function createDryRunProgressMessage(params: {
+  mode: Exclude<SyncMode, "idle">;
+  searchPlan: SyncSearchPlan;
+  stage: "counting" | "scanning";
+  totalProducts: number | null;
+}) {
+  if (params.mode === "full") {
+    if (params.stage === "counting") {
+      return "Counting Shopify products across the full catalog.";
+    }
+
+    if (typeof params.totalProducts === "number") {
+      return `Found ${params.totalProducts.toLocaleString()} Shopify products across all statuses. Scanning the full catalog.`;
+    }
+
+    return "Scanning and normalizing the full catalog.";
+  }
+
+  const queuedCount = params.searchPlan.productIds?.length ?? 0;
+
+  if (params.stage === "counting") {
+    return queuedCount > 0
+      ? `Counting ${queuedCount.toLocaleString()} Shopify products queued by create/update webhooks for delta processing.`
+      : "Checking the Shopify webhook queue for queued delta product updates.";
+  }
+
+  return queuedCount > 0
+    ? `Scanning ${queuedCount.toLocaleString()} Shopify products queued by create/update webhooks for delta processing.`
+    : "No Shopify create/update webhooks are queued right now. Delta scanning will only confirm whether webhook-driven deletes are pending.";
+}
+
 async function buildDryRunPreview(params: {
   mode: Exclude<SyncMode, "idle">;
   previewLimit: number;
@@ -2286,71 +2599,29 @@ async function buildDryRunPreview(params: {
   allowDeltaFallback?: boolean;
   onProgress?: (update: SyncProgressUpdate) => Promise<void> | void;
 }) {
-  const search = await buildSearchQuery(params.mode, params.settings, {
+  if (params.onProgress) {
+    await params.onProgress({
+      stage: "counting",
+      exhaustive: params.exhaustive,
+      totalProducts: getProgressTargetTotal(params.exhaustive, null),
+      productsScanned: 0,
+      pagesScanned: 0,
+      previewRows: 0,
+      message:
+        params.mode === "full"
+          ? "Counting Shopify products across the full catalog."
+          : "Checking the Shopify webhook queue for queued delta product updates.",
+    });
+  }
+
+  const context = await prepareSyncExecutionContext({
+    mode: params.mode,
+    settings: params.settings,
     dryRun: params.dryRun,
-    now: params.effectiveNow,
+    effectiveNow: params.effectiveNow,
     allowDeltaFallback: params.allowDeltaFallback,
   });
-  const createProgressMessage = (
-    stage: "counting" | "scanning",
-    totalProductsValue: number | null,
-  ) => {
-    if (params.mode === "full") {
-      if (stage === "counting") {
-        return "Counting Shopify products across the full catalog.";
-      }
-
-      if (typeof totalProductsValue === "number") {
-        return `Found ${totalProductsValue.toLocaleString()} Shopify products across all statuses. Scanning the full catalog.`;
-      }
-
-      return "Scanning and normalizing the full catalog.";
-    }
-
-    if (search.source === "live_sync_checkpoint") {
-      if (stage === "counting") {
-        return "Counting Shopify products changed since the last successful live sync.";
-      }
-
-      if (typeof totalProductsValue === "number") {
-        return `Found ${totalProductsValue.toLocaleString()} products in the current delta checkpoint window. Scanning matches, including items that now require Merchant deletes.`;
-      }
-
-      return "Scanning Shopify products changed since the last successful live sync.";
-    }
-
-    if (stage === "counting") {
-      return `Counting Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window.`;
-    }
-
-    if (typeof totalProductsValue === "number") {
-      return `Found ${totalProductsValue.toLocaleString()} products in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window. Scanning matches.`;
-    }
-
-    return `Scanning Shopify products changed in the fallback ${DELTA_PREVIEW_FALLBACK_LOOKBACK_DAYS}-day delta window.`;
-  };
-
-  const shop = getConfiguredShopDomain();
-
-  if (!shop) {
-    throw new Error("Missing SHOPIFY_STORE_DOMAIN.");
-  }
-
-  const token = await getRuntimeShopifyAccessToken();
-
-  if (!token) {
-    throw new Error(
-      "Missing Shopify runtime credentials. Provide SHOPIFY_ADMIN_ACCESS_TOKEN or configure SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET.",
-    );
-  }
-
-  const connection = await fetchShopConnectionDetails({
-    shop,
-    accessToken: token.accessToken,
-  });
-  const storefrontBaseUrl = connection.connected
-    ? connection.shop?.primaryDomainUrl ?? null
-    : null;
+  const previewTarget = Math.max(params.previewLimit, params.artifactSampleLimit);
   const preview: FeedPreviewRecord[] = [];
   const allRecords: FeedPreviewRecord[] = [];
   const allExcludedRows: ExcludedPreviewSample[] = [];
@@ -2360,15 +2631,17 @@ async function buildDryRunPreview(params: {
   const deleteSamples: DeletePreviewSample[] = [];
   const deleteCandidates: MerchantDeleteTarget[] = [];
   const exclusions: Record<string, number> = {};
-  let totalProducts: number | null = null;
   let cursor: string | null = null;
   let productsFetched = 0;
+  let productsEvaluated = 0;
   let variantsConsidered = 0;
   let recordsPrepared = 0;
   let pagesScanned = 0;
-  let productsEvaluated = 0;
   let scanCompleted = false;
-  let progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
+  let progressTargetTotal = getProgressTargetTotal(
+    params.exhaustive,
+    context.totalProducts,
+  );
   let lastProgressEvaluated = 0;
 
   const sendScanningProgress = async (force = false) => {
@@ -2391,38 +2664,14 @@ async function buildDryRunPreview(params: {
         : Math.min(productsEvaluated, progressTargetTotal ?? SHOPIFY_PAGE_SIZE),
       pagesScanned,
       previewRows: preview.length,
-      message: createProgressMessage("scanning", totalProducts),
+      message: createDryRunProgressMessage({
+        mode: params.mode,
+        searchPlan: context.searchPlan,
+        stage: "scanning",
+        totalProducts: context.totalProducts,
+      }),
     });
   };
-
-  if (params.onProgress) {
-    await params.onProgress({
-      stage: "counting",
-      exhaustive: params.exhaustive,
-      totalProducts: progressTargetTotal,
-      productsScanned: 0,
-      pagesScanned: 0,
-      previewRows: 0,
-      message: createProgressMessage("counting", totalProducts),
-    });
-  }
-
-  try {
-    const countPayload = await runShopifyAdminGraphql<ShopifyProductsCountPayload>({
-      shop,
-      accessToken: token.accessToken,
-      query: SHOPIFY_PRODUCTS_COUNT_QUERY,
-      variables: {
-        query: search.query,
-      },
-    });
-
-    totalProducts = countPayload.productsCount?.count ?? null;
-  } catch {
-    totalProducts = null;
-  }
-
-  progressTargetTotal = getProgressTargetTotal(params.exhaustive, totalProducts);
 
   if (params.onProgress) {
     await params.onProgress({
@@ -2432,266 +2681,72 @@ async function buildDryRunPreview(params: {
       productsScanned: 0,
       pagesScanned: 0,
       previewRows: 0,
-      message: createProgressMessage("scanning", totalProducts),
+      message: createDryRunProgressMessage({
+        mode: params.mode,
+        searchPlan: context.searchPlan,
+        stage: "scanning",
+        totalProducts: context.totalProducts,
+      }),
     });
   }
 
-  while (params.exhaustive || preview.length < params.artifactSampleLimit) {
-    const payload: ShopifyFeedProductsPayload =
-      await runShopifyAdminGraphql<ShopifyFeedProductsPayload>({
-        shop,
-        accessToken: token.accessToken,
-        query: SHOPIFY_PRODUCT_SCAN_QUERY,
-        variables: {
-          first: SHOPIFY_PAGE_SIZE,
-          after: cursor,
-          query: search.query,
-        },
-      });
-    const products = connectionNodes<ShopifyProductNode>(payload.products);
+  const maxProductsPerChunk = params.exhaustive
+    ? LIVE_SYNC_CHUNK_PRODUCT_TARGET
+    : SHOPIFY_PAGE_SIZE;
 
-    if (products.length === 0) {
-      scanCompleted = true;
-      break;
+  while (params.exhaustive || preview.length < previewTarget) {
+    const chunk = await scanSyncExecutionChunk({
+      context,
+      cursor,
+      maxProducts: maxProductsPerChunk,
+      artifactSampleLimit: params.artifactSampleLimit,
+      collectAllRecords: params.collectAllRecords,
+      captureDeleteCandidates: params.captureDeleteCandidates,
+    });
+
+    cursor = chunk.nextCursor;
+    scanCompleted = chunk.scanCompleted;
+    pagesScanned += chunk.pagesScanned;
+    productsFetched += chunk.productsFetched;
+    productsEvaluated += chunk.productsEvaluated;
+    variantsConsidered += chunk.variantsConsidered;
+    recordsPrepared += chunk.recordsPrepared;
+
+    for (const [reason, count] of Object.entries(chunk.exclusions)) {
+      exclusions[reason] = (exclusions[reason] ?? 0) + count;
     }
 
-    pagesScanned += 1;
-    productsFetched += products.length;
-
-    const shouldHydrateDetails =
-      params.collectAllRecords ||
-      params.captureDeleteCandidates ||
-      preview.length < params.artifactSampleLimit;
-    const candidateIds: string[] = [];
-
-    for (const product of products) {
-      const exclusionReason = findProductExclusionReason(product);
-
-      if (exclusionReason && !shouldHydrateDetails) {
-        const excludedRow = {
-          reason: exclusionReason,
-          productId: resolveLegacyId(product.legacyResourceId, product.id),
-          variantId: null,
-          offerId: null,
-          handle: product.handle,
-          title: product.title,
-          variantTitle: null,
-          sku: null,
-          link: product.onlineStoreUrl ?? null,
-        } satisfies ExcludedPreviewSample;
-        incrementCounter(exclusions, exclusionReason);
-        collectExcludedSample(excludedSamples, excludedRow);
-        if (params.collectAllRecords) {
-          allExcludedRows.push(excludedRow);
-        }
-        if (isValidationExclusionReason(exclusionReason)) {
-          collectExcludedSample(validationSamples, excludedRow);
-          if (params.collectAllRecords) {
-            allValidationRows.push(excludedRow);
-          }
-        }
-        productsEvaluated += 1;
-        continue;
-      }
-
-      candidateIds.push(product.id);
+    if (params.collectAllRecords) {
+      allRecords.push(...chunk.rows);
+      allExcludedRows.push(...chunk.excludedRows);
+      allValidationRows.push(...chunk.validationRows);
     }
 
-    const detailPayloads = shouldHydrateDetails
-      ? await Promise.all(
-          chunkArray(candidateIds, DETAIL_BATCH_SIZE).map((batchIds) =>
-            runShopifyAdminGraphql<ShopifyProductDetailsPayload>({
-              shop,
-              accessToken: token.accessToken,
-              query: SHOPIFY_PRODUCT_DETAILS_QUERY,
-              variables: {
-                ids: batchIds,
-                mediaLimit: DETAIL_MEDIA_LIMIT,
-                variantLimit: DETAIL_VARIANT_PAGE_SIZE,
-              },
-            }),
-          ),
-        )
-      : [];
-
-    for (const detailPayload of detailPayloads) {
-      const detailedProducts =
-        detailPayload.nodes?.filter(
-          (product): product is ShopifyProductNode => Boolean(product),
-        ) ?? [];
-
-      for (const product of detailedProducts) {
-        const productId = resolveLegacyId(product.legacyResourceId, product.id);
-        const productMediaUrls = collectMediaUrls(product);
-        const productExclusionReason = findProductExclusionReason(product);
-        const initialVariants = connectionNodes<ShopifyVariantNode>(product.variants);
-        const variants = product.variants?.pageInfo?.hasNextPage
-          ? await fetchAllProductVariants({
-              shop,
-              accessToken: token.accessToken,
-              productId: product.id,
-              initialVariants,
-              afterCursor: product.variants.pageInfo.endCursor ?? null,
-            })
-          : initialVariants;
-
-        if (productExclusionReason) {
-          if (variants.length === 0) {
-            const excludedRow = {
-              reason: productExclusionReason,
-              productId,
-              variantId: null,
-              offerId: null,
-              handle: product.handle,
-              title: product.title,
-              variantTitle: null,
-              sku: null,
-              link: product.onlineStoreUrl ?? null,
-            } satisfies ExcludedPreviewSample;
-            incrementCounter(exclusions, productExclusionReason);
-            collectExcludedSample(excludedSamples, excludedRow);
-            if (params.collectAllRecords) {
-              allExcludedRows.push(excludedRow);
-            }
-          }
-
-          for (const variant of variants) {
-            variantsConsidered += 1;
-            const deleteTarget = buildDeleteTarget({
-              product,
-              variant,
-              reason: productExclusionReason,
-            });
-            const excludedRow = {
-              reason: productExclusionReason,
-              productId,
-              variantId: deleteTarget.variantId ?? null,
-              offerId: deleteTarget.offerId,
-              handle: product.handle,
-              title: product.title,
-              variantTitle: variant.title,
-              sku: variant.sku ?? null,
-              link: product.onlineStoreUrl ?? null,
-            } satisfies ExcludedPreviewSample;
-
-            incrementCounter(exclusions, productExclusionReason);
-            collectExcludedSample(excludedSamples, excludedRow);
-            if (params.collectAllRecords) {
-              allExcludedRows.push(excludedRow);
-            }
-            if (params.captureDeleteCandidates) {
-              deleteCandidates.push(deleteTarget);
-              collectExcludedSample(deleteSamples, {
-                ...excludedRow,
-                source: "shopify_scan",
-              } satisfies DeletePreviewSample);
-            }
-          }
-
-          productsEvaluated += 1;
-          await sendScanningProgress();
-
-          if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
-            break;
-          }
-
-          continue;
-        }
-
-        for (const variant of variants) {
-          variantsConsidered += 1;
-
-          const record = buildPreviewRecord({
-            product,
-            variant,
-            totalVariants: variants.length,
-            storefrontBaseUrl,
-            productMediaUrls,
-          });
-
-          if ("excluded" in record) {
-            const excludedRow = {
-              reason: record.excluded,
-              details: record.details,
-              productId: productId,
-              variantId: resolveLegacyId(variant.legacyResourceId, variant.id),
-              offerId: buildShopifyOfferId(
-                productId,
-                resolveLegacyId(variant.legacyResourceId, variant.id),
-              ),
-              handle: product.handle,
-              title: product.title,
-              variantTitle: variant.title,
-              sku: variant.sku ?? null,
-              link: record.link ?? null,
-            } satisfies ExcludedPreviewSample;
-            incrementCounter(exclusions, record.excluded);
-            collectExcludedSample(excludedSamples, excludedRow);
-            if (params.collectAllRecords) {
-              allExcludedRows.push(excludedRow);
-            }
-            if (isValidationExclusionReason(record.excluded)) {
-              collectExcludedSample(validationSamples, excludedRow);
-              if (params.collectAllRecords) {
-                allValidationRows.push(excludedRow);
-              }
-            }
-            if (params.captureDeleteCandidates) {
-              const deleteTarget = buildDeleteTarget({
-                product,
-                variant,
-                reason: record.excluded,
-              });
-              deleteCandidates.push(deleteTarget);
-              collectExcludedSample(deleteSamples, {
-                ...excludedRow,
-                source: "shopify_scan",
-              } satisfies DeletePreviewSample);
-            }
-            continue;
-          }
-
-          recordsPrepared += 1;
-
-          if (params.collectAllRecords) {
-            allRecords.push(record);
-          }
-
-          if (preview.length < params.artifactSampleLimit) {
-            preview.push(record);
-          }
-
-          if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
-            break;
-          }
-        }
-
-        productsEvaluated += 1;
-        await sendScanningProgress();
-
-        if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
-          break;
-        }
-      }
-
-      if (!params.exhaustive && preview.length >= params.artifactSampleLimit) {
+    for (const record of chunk.includedSamples) {
+      if (preview.length >= previewTarget) {
         break;
       }
+
+      preview.push(record);
     }
 
-    if (!payload.products?.pageInfo?.hasNextPage) {
-      scanCompleted = true;
-      break;
-    }
-
-    cursor = payload.products.pageInfo.endCursor;
-
-    if (!cursor) {
-      scanCompleted = true;
-      break;
-    }
+    chunk.validationSamples.forEach((row) => {
+      collectExcludedSample(validationSamples, row);
+    });
+    chunk.excludedSamples.forEach((row) => {
+      collectExcludedSample(excludedSamples, row);
+    });
+    chunk.deleteSamples.forEach((row) => {
+      collectExcludedSample(deleteSamples, row);
+    });
+    deleteCandidates.push(...chunk.deleteCandidates);
 
     await sendScanningProgress();
+
+    if (scanCompleted || !cursor) {
+      scanCompleted = true;
+      break;
+    }
   }
 
   await sendScanningProgress(true);
@@ -2713,11 +2768,11 @@ async function buildDryRunPreview(params: {
   }
 
   return {
-    searchPlan: search,
-    query: search.query,
-    lookbackStart: search.lookbackStart,
-    searchNotes: search.notes,
-    storefrontBaseUrl,
+    searchPlan: context.searchPlan,
+    query: context.query,
+    lookbackStart: context.lookbackStart,
+    searchNotes: context.searchNotes,
+    storefrontBaseUrl: context.storefrontBaseUrl,
     allRecords,
     allExcludedRows,
     allValidationRows,
@@ -2731,7 +2786,7 @@ async function buildDryRunPreview(params: {
     validationIssues: countValidationIssues(exclusions),
     pagesScanned,
     scanCompleted,
-    totalProducts,
+    totalProducts: context.totalProducts,
     productsFetched,
     variantsConsidered,
     recordsPrepared,
@@ -3099,6 +3154,16 @@ export async function runSync(
         ),
       );
     }
+    if (
+      merchant?.errorCount === 0 &&
+      mode === "delta" &&
+      previewRun.searchPlan.source === "webhook_queue" &&
+      (previewRun.searchPlan.productIds?.length ?? 0) > 0
+    ) {
+      await removePendingShopifyUpserts(previewRun.searchPlan.productIds ?? [], {
+        queuedAtLte: startedAt,
+      });
+    }
     const notes = buildSyncNotes({
       dryRun,
       exhaustive,
@@ -3220,7 +3285,7 @@ export async function runSync(
     }).catch(() => ({
       query: mode === "full" ? "" : "",
       lookbackStart: null,
-      source: mode === "full" ? "full_catalog" : "lookback_fallback",
+      source: mode === "full" ? "full_catalog" : "webhook_queue",
       notes: [],
     } satisfies SyncSearchPlan));
 

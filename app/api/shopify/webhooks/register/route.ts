@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { isOperatorAuthenticated } from "@/lib/operator-auth";
-import { ensureShopifyProductsDeleteWebhook } from "@/lib/shopify";
+import {
+  ensureShopifyProductsCreateWebhook,
+  ensureShopifyProductsDeleteWebhook,
+  ensureShopifyProductsUpdateWebhook,
+} from "@/lib/shopify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,11 +21,17 @@ export async function GET() {
   }
 
   try {
-    const productsDelete = await ensureShopifyProductsDeleteWebhook();
+    const [productsCreate, productsUpdate, productsDelete] = await Promise.all([
+      ensureShopifyProductsCreateWebhook(),
+      ensureShopifyProductsUpdateWebhook(),
+      ensureShopifyProductsDeleteWebhook(),
+    ]);
 
     return NextResponse.json({
       ok: true,
       webhooks: {
+        productsCreate,
+        productsUpdate,
         productsDelete,
       },
     });

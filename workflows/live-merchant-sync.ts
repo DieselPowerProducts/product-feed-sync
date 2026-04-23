@@ -769,6 +769,17 @@ async function removeSucceededPendingDeletesStep(
   await removePendingShopifyDeletes(targets);
 }
 
+async function removeSucceededPendingUpsertsStep(
+  productIds: string[],
+  queuedAtLte: string,
+) {
+  "use step";
+  const { removePendingShopifyUpserts } = await import("@/lib/operator-store");
+  await removePendingShopifyUpserts(productIds, {
+    queuedAtLte,
+  });
+}
+
 async function persistSuccessfulRunStep(params: {
   runId: string;
   input: LiveMerchantSyncWorkflowInput;
@@ -1176,6 +1187,10 @@ export async function liveMerchantSyncWorkflow(
       message:
         input.mode === "full"
           ? "Counting Shopify products and preparing chunked full sync."
+          : context.searchPlan.source === "webhook_queue"
+            ? (context.totalProducts ?? 0) > 0
+              ? `Counting ${context.totalProducts?.toLocaleString() ?? "0"} Shopify products queued by create/update webhooks. Feed fingerprints will skip unchanged Merchant rows before writing.`
+              : "No Shopify create/update webhooks are queued right now. This delta run will only process pending webhook-driven deletes."
           : fingerprintBaselineCount > 0
             ? "Counting Shopify products touched in the delta window. Feed fingerprints will skip unchanged Merchant rows before writing."
             : "Counting Shopify products changed in the delta window.",
@@ -1204,7 +1219,13 @@ export async function liveMerchantSyncWorkflow(
         pagesScanned,
         stage: "scanning",
         message:
-          input.mode === "delta" && fingerprintBaselineCount > 0
+          input.mode === "delta" && context.searchPlan.source === "webhook_queue"
+            ? (context.totalProducts ?? 0) > 0
+              ? chunksCompleted === 0
+                ? `Scanning the first chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products from the webhook queue; unchanged GMC payloads will be skipped.`
+                : `Scanning the next chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify products from the webhook queue; unchanged GMC payloads will be skipped.`
+              : "No queued Shopify product upserts were found. Confirming whether any webhook-driven deletes still need Merchant cleanup."
+          : input.mode === "delta" && fingerprintBaselineCount > 0
             ? chunksCompleted === 0
               ? `Scanning the first chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify candidate products; unchanged GMC payloads will be skipped.`
               : `Scanning the next chunk of up to ${chunkTargetProducts.toLocaleString()} Shopify candidate products; unchanged GMC payloads will be skipped.`
@@ -1680,6 +1701,18 @@ export async function liveMerchantSyncWorkflow(
       unchangedRecordsSkipped,
       liveOfferIndexDataSourceName: merchantIdentity.dataSourceName,
     });
+
+    if (
+      result.ok &&
+      input.mode === "delta" &&
+      context.searchPlan.source === "webhook_queue" &&
+      (context.searchPlan.productIds?.length ?? 0) > 0
+    ) {
+      await removeSucceededPendingUpsertsStep(
+        context.searchPlan.productIds ?? [],
+        startedAt,
+      );
+    }
 
     const completionProgress = createProgressSnapshot({
       input,

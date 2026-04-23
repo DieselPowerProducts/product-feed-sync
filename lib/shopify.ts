@@ -217,6 +217,10 @@ export function getShopifyProductsDeleteWebhookUrl(request?: NextRequest) {
   return `${getAppOrigin(request)}/api/shopify/webhooks/products-delete`;
 }
 
+export function getShopifyProductsUpsertWebhookUrl(request?: NextRequest) {
+  return `${getAppOrigin(request)}/api/shopify/webhooks/products-upsert`;
+}
+
 export function getShopifyScopes() {
   return env.shopifyScopes
     .split(",")
@@ -240,6 +244,7 @@ export function getShopifyConfigurationStatus() {
     callbackUrl: getShopifyCallbackUrl(),
     installUrl: getShopifyAuthStartUrl(),
     productsDeleteWebhookUrl: getShopifyProductsDeleteWebhookUrl(),
+    productsUpsertWebhookUrl: getShopifyProductsUpsertWebhookUrl(),
   };
 }
 
@@ -273,12 +278,15 @@ function connectionNodes<T>(connection: {
   );
 }
 
-export async function getShopifyProductsDeleteWebhookStatus() {
-  const uri = getShopifyProductsDeleteWebhookUrl();
+async function getShopifyProductWebhookStatus(params: {
+  topic: "PRODUCTS_CREATE" | "PRODUCTS_DELETE" | "PRODUCTS_UPDATE";
+  uri: string;
+  queryName: string;
+}) {
   const payload = await runShopifyAdminGraphql<ShopifyWebhookSubscriptionsPayload>({
     query: `
-      query ProductDeleteWebhookSubscriptions {
-        webhookSubscriptions(first: 25, topics: PRODUCTS_DELETE) {
+      query ${params.queryName} {
+        webhookSubscriptions(first: 25, topics: ${params.topic}) {
           edges {
             node {
               id
@@ -292,28 +300,30 @@ export async function getShopifyProductsDeleteWebhookStatus() {
   });
   const subscriptions = connectionNodes(payload.webhookSubscriptions);
   const matchingSubscription =
-    subscriptions.find((subscription) => subscription.uri === uri) ?? null;
+    subscriptions.find((subscription) => subscription.uri === params.uri) ?? null;
 
   return {
-    uri,
+    uri: params.uri,
     registered: Boolean(matchingSubscription),
     subscriptionId: matchingSubscription?.id ?? null,
     subscriptions,
   };
 }
 
-export async function ensureShopifyProductsDeleteWebhook() {
-  const current = await getShopifyProductsDeleteWebhookStatus();
-
-  if (current.registered) {
-    return current;
+async function ensureShopifyProductWebhook(params: {
+  topic: "PRODUCTS_CREATE" | "PRODUCTS_DELETE" | "PRODUCTS_UPDATE";
+  uri: string;
+  current: Awaited<ReturnType<typeof getShopifyProductWebhookStatus>>;
+  mutationName: string;
+}) {
+  if (params.current.registered) {
+    return params.current;
   }
 
-  const uri = getShopifyProductsDeleteWebhookUrl();
   const payload =
     await runShopifyAdminGraphql<ShopifyWebhookSubscriptionCreatePayload>({
       query: `
-        mutation EnsureProductDeleteWebhook(
+        mutation ${params.mutationName}(
           $topic: WebhookSubscriptionTopic!
           $webhookSubscription: WebhookSubscriptionInput!
         ) {
@@ -334,9 +344,9 @@ export async function ensureShopifyProductsDeleteWebhook() {
         }
       `,
       variables: {
-        topic: "PRODUCTS_DELETE",
+        topic: params.topic,
         webhookSubscription: {
-          uri,
+          uri: params.uri,
         },
       },
     });
@@ -355,13 +365,68 @@ export async function ensureShopifyProductsDeleteWebhook() {
   }
 
   return {
-    uri,
+    uri: params.uri,
     registered: true,
-    subscriptionId: payload.webhookSubscriptionCreate?.webhookSubscription?.id ?? null,
+    subscriptionId:
+      payload.webhookSubscriptionCreate?.webhookSubscription?.id ?? null,
     subscriptions: payload.webhookSubscriptionCreate?.webhookSubscription
       ? [payload.webhookSubscriptionCreate.webhookSubscription]
       : [],
   };
+}
+
+export async function getShopifyProductsDeleteWebhookStatus() {
+  return getShopifyProductWebhookStatus({
+    topic: "PRODUCTS_DELETE",
+    uri: getShopifyProductsDeleteWebhookUrl(),
+    queryName: "ProductDeleteWebhookSubscriptions",
+  });
+}
+
+export async function getShopifyProductsCreateWebhookStatus() {
+  return getShopifyProductWebhookStatus({
+    topic: "PRODUCTS_CREATE",
+    uri: getShopifyProductsUpsertWebhookUrl(),
+    queryName: "ProductCreateWebhookSubscriptions",
+  });
+}
+
+export async function getShopifyProductsUpdateWebhookStatus() {
+  return getShopifyProductWebhookStatus({
+    topic: "PRODUCTS_UPDATE",
+    uri: getShopifyProductsUpsertWebhookUrl(),
+    queryName: "ProductUpdateWebhookSubscriptions",
+  });
+}
+
+export async function ensureShopifyProductsDeleteWebhook() {
+  const current = await getShopifyProductsDeleteWebhookStatus();
+  return ensureShopifyProductWebhook({
+    topic: "PRODUCTS_DELETE",
+    uri: getShopifyProductsDeleteWebhookUrl(),
+    current,
+    mutationName: "EnsureProductDeleteWebhook",
+  });
+}
+
+export async function ensureShopifyProductsCreateWebhook() {
+  const current = await getShopifyProductsCreateWebhookStatus();
+  return ensureShopifyProductWebhook({
+    topic: "PRODUCTS_CREATE",
+    uri: getShopifyProductsUpsertWebhookUrl(),
+    current,
+    mutationName: "EnsureProductCreateWebhook",
+  });
+}
+
+export async function ensureShopifyProductsUpdateWebhook() {
+  const current = await getShopifyProductsUpdateWebhookStatus();
+  return ensureShopifyProductWebhook({
+    topic: "PRODUCTS_UPDATE",
+    uri: getShopifyProductsUpsertWebhookUrl(),
+    current,
+    mutationName: "EnsureProductUpdateWebhook",
+  });
 }
 
 export function createOauthState() {
