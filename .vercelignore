@@ -1,0 +1,13 @@
+.git
+.next
+.swc
+.vercel
+node_modules
+tempapp
+newChanges
+training
+.env*
+*.tsbuildinfo
+dpp-feed-*.csv
+dpp-feed-*.xlsx
+dpp-product-feed-sync-*.json
