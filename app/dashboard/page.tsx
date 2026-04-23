@@ -522,6 +522,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                       <td className="px-4 py-4">
                         <p
                           className={
+                            entry.outcome === "completed" ||
                             entry.outcome === "queued" ||
                             entry.outcome === "skipped_duplicate" ||
                             entry.outcome === "skipped_idle"

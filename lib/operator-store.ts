@@ -118,6 +118,8 @@ export interface CronInvocationEntry {
   decisionMode: "idle" | "delta" | "full" | null;
   outcome:
     | "queued"
+    | "completed"
+    | "cancelled"
     | "skipped_idle"
     | "skipped_duplicate"
     | "skipped_active_run"
@@ -338,6 +340,8 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
               : null,
           outcome:
             entry.outcome === "queued" ||
+            entry.outcome === "completed" ||
+            entry.outcome === "cancelled" ||
             entry.outcome === "skipped_idle" ||
             entry.outcome === "skipped_duplicate" ||
             entry.outcome === "skipped_active_run" ||
@@ -1096,6 +1100,35 @@ export async function appendCronInvocation(entry: CronInvocationEntry) {
   });
 
   return entry;
+}
+
+export async function updateCronInvocationByRunId(
+  runId: string,
+  patch: Partial<Pick<CronInvocationEntry, "outcome" | "message">>,
+) {
+  const state = await readState();
+  const index = state.cronInvocations.findIndex(
+    (entry) => entry.runId === runId,
+  );
+
+  if (index === -1) {
+    return null;
+  }
+
+  const cronInvocations = [...state.cronInvocations];
+  const existing = cronInvocations[index];
+  cronInvocations[index] = {
+    ...existing,
+    ...patch,
+    runId,
+  };
+
+  await writeState({
+    ...state,
+    cronInvocations,
+  });
+
+  return cronInvocations[index];
 }
 
 export async function getLatestSuccessfulLiveSyncHistory() {

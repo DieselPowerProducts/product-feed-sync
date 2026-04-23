@@ -3,6 +3,7 @@ import {
   clearActiveSyncRun,
   getActiveSyncRun,
   setActiveSyncRun,
+  updateCronInvocationByRunId,
   type SyncHistoryPurpose,
   type SyncSettings,
 } from "@/lib/operator-store";
@@ -23,6 +24,23 @@ export async function resolveActiveLiveSyncRun() {
 
     if (status !== "completed" && status !== "failed" && status !== "cancelled") {
       return activeRun;
+    }
+
+    if (activeRun.trigger === "cron") {
+      await updateCronInvocationByRunId(activeRun.runId, {
+        outcome:
+          status === "completed"
+            ? "completed"
+            : status === "cancelled"
+              ? "cancelled"
+              : "failed",
+        message:
+          status === "completed"
+            ? `Scheduled ${activeRun.mode} live sync finished.`
+            : status === "cancelled"
+              ? `Scheduled ${activeRun.mode} live sync was cancelled before completion.`
+              : `Scheduled ${activeRun.mode} live sync failed before completion.`,
+      });
     }
   } catch {
     // Treat lookup failures as stale state and clear the local lock.

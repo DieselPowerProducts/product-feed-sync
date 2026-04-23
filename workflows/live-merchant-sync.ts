@@ -770,6 +770,7 @@ async function removeSucceededPendingDeletesStep(
 }
 
 async function persistSuccessfulRunStep(params: {
+  runId: string;
   input: LiveMerchantSyncWorkflowInput;
   context: SyncExecutionContext;
   startedAt: string;
@@ -800,6 +801,7 @@ async function persistSuccessfulRunStep(params: {
     appendSyncHistory,
     readPreviewExportArtifact,
     saveLiveOfferIndex,
+    updateCronInvocationByRunId,
     writePreviewExportArtifact,
     writeRunArtifact,
   } = await import("@/lib/operator-store");
@@ -959,10 +961,20 @@ async function persistSuccessfulRunStep(params: {
   await writeRunArtifact(artifactId, artifact);
   await appendSyncHistory(toHistoryEntry(result, artifactId));
 
+  if (params.input.trigger === "cron") {
+    await updateCronInvocationByRunId(params.runId, {
+      outcome: result.ok ? "completed" : "failed",
+      message: result.ok
+        ? `Scheduled ${params.input.mode} live sync completed successfully.`
+        : `Scheduled ${params.input.mode} live sync completed with Merchant API errors. Review run history before trusting this sync.`,
+    });
+  }
+
   return result;
 }
 
 async function persistFailedRunStep(params: {
+  runId: string;
   input: LiveMerchantSyncWorkflowInput;
   context: SyncExecutionContext | null;
   startedAt: string;
@@ -974,6 +986,7 @@ async function persistFailedRunStep(params: {
   const {
     appendSyncHistory,
     deletePreviewExportArtifact,
+    updateCronInvocationByRunId,
     writeRunArtifact,
   } = await import("@/lib/operator-store");
 
@@ -1057,6 +1070,13 @@ async function persistFailedRunStep(params: {
 
   await writeRunArtifact(artifactId, artifact);
   await appendSyncHistory(toHistoryEntry(result, artifactId));
+
+  if (params.input.trigger === "cron") {
+    await updateCronInvocationByRunId(params.runId, {
+      outcome: "failed",
+      message: `Scheduled ${params.input.mode} live sync failed: ${params.message}`,
+    });
+  }
 
   return result;
 }
@@ -1631,6 +1651,7 @@ export async function liveMerchantSyncWorkflow(
     }
 
     const result = await persistSuccessfulRunStep({
+      runId,
       input: {
         ...input,
         startedAt,
@@ -1706,6 +1727,7 @@ export async function liveMerchantSyncWorkflow(
     const message =
       error instanceof Error ? error.message : "Unknown chunked sync execution error.";
     const failure = await persistFailedRunStep({
+      runId,
       input: {
         ...input,
         startedAt,
