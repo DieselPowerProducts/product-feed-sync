@@ -3,6 +3,7 @@ import { ActiveSyncRunPanel } from "@/app/dashboard/active-sync-run-panel";
 import { FirstFullSyncButton } from "@/app/dashboard/first-full-sync-button";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
+  getCronInvocations,
   getOperatorStoreStatus,
   getBootstrapState,
   getSyncHistory,
@@ -33,6 +34,7 @@ type DashboardData = {
   shopifyConnection: Awaited<ReturnType<typeof getRuntimeShopifyConnection>>;
   bootstrap: Awaited<ReturnType<typeof getBootstrapState>>;
   activeRun: Awaited<ReturnType<typeof resolveActiveLiveSyncRun>>;
+  cronInvocations: Awaited<ReturnType<typeof getCronInvocations>>;
   degraded: boolean;
 };
 
@@ -89,6 +91,10 @@ function prettifyStorageMode(mode: "neon" | "blob" | "local" | "memory") {
   }
 
   return "In-memory";
+}
+
+function formatNullableTimestamp(value: string | null | undefined) {
+  return value ? formatTimestamp(value) : "Never";
 }
 
 function getSavedMessage(saved: string | undefined) {
@@ -168,6 +174,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
     getRuntimeShopifyConnection(),
     getBootstrapState(),
     resolveActiveLiveSyncRun(),
+    getCronInvocations(10),
   ]);
 
   return {
@@ -191,6 +198,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
         ? results[4].value
         : { firstFullSyncCompletedAt: null },
     activeRun: results[5].status === "fulfilled" ? results[5].value : null,
+    cronInvocations: results[6].status === "fulfilled" ? results[6].value : [],
     degraded: results.some((result) => result.status === "rejected"),
   };
 }
@@ -210,6 +218,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
     shopifyConnection,
     bootstrap,
     activeRun,
+    cronInvocations,
     degraded,
   } = await loadDashboardData(now);
   const upcoming = getUpcomingSyncDates(now, settings);
@@ -424,7 +433,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   Operational state now lives in the persistent app store.
                   Downloadable run exports stay on object storage.
                   <br />
-                  Vercel cron still runs daily at <code>09:00 UTC</code>.
+                  Vercel cron has one primary trigger at <code>09:00 UTC</code>
+                  , with backup checks at <code>10:00</code>,{" "}
+                  <code>11:00</code>, and <code>12:00 UTC</code>.
                   <br />
                   The UI controls cadence logic, not the cron clock itself.
                 </p>
@@ -432,6 +443,111 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </article>
           </div>
         </article>
+      </section>
+
+      <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted">
+              Scheduled trigger monitor
+            </p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
+              Vercel cron contact history
+            </h2>
+          </div>
+          <p className="text-sm text-muted">
+            These rows prove whether Vercel actually called the cron route. The
+            backup triggers skip if the due delta or full already completed for
+            the current cron window.
+          </p>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
+          <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Last contact
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {formatNullableTimestamp(cronInvocations[0]?.firedAt)}
+            </p>
+          </article>
+          <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Last outcome
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {cronInvocations[0]?.outcome ?? "No cron contact recorded yet"}
+            </p>
+          </article>
+          <article className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Last decision
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {cronInvocations[0]?.decisionMode ?? "none"}
+            </p>
+          </article>
+        </div>
+
+        {cronInvocations.length ? (
+          <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
+                  <tr>
+                    <th className="px-4 py-3">Fired</th>
+                    <th className="px-4 py-3">Decision</th>
+                    <th className="px-4 py-3">Outcome</th>
+                    <th className="px-4 py-3">Run</th>
+                    <th className="px-4 py-3">Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cronInvocations.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="border-b border-line/70 align-top last:border-b-0"
+                    >
+                      <td className="px-4 py-4">
+                        <p className="font-semibold text-foreground">
+                          {formatTimestamp(entry.firedAt)}
+                        </p>
+                        <p className="mt-2 text-muted">
+                          {entry.authorized ? "authorized" : "unauthorized"}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 text-muted">
+                        {entry.decisionMode ?? "none"}
+                      </td>
+                      <td className="px-4 py-4">
+                        <p
+                          className={
+                            entry.outcome === "queued" ||
+                            entry.outcome === "skipped_duplicate" ||
+                            entry.outcome === "skipped_idle"
+                              ? "font-semibold text-success"
+                              : "font-semibold text-accent-strong"
+                          }
+                        >
+                          {entry.outcome}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 font-mono text-xs uppercase tracking-[0.16em] text-muted">
+                        {entry.runId ?? "-"}
+                      </td>
+                      <td className="px-4 py-4 text-muted">{entry.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-[1.5rem] border border-dashed border-line bg-white/55 p-6 text-sm text-muted">
+            No Vercel cron contact has been recorded yet. The next primary or
+            backup cron request will appear here.
+          </div>
+        )}
       </section>
 
       <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
@@ -560,7 +676,11 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           GMC records: {entry.stats.recordsPrepared}
                         </p>
                         <p className="mt-2">
-                          Excluded/delete scope: {entry.stats.excluded}
+                          Excluded from feed: {entry.stats.excluded}
+                        </p>
+                        <p className="mt-2">
+                          Merchant deletes:{" "}
+                          {entry.stats.merchantDeletesAttempted ?? 0}
                         </p>
                         <p className="mt-2">
                           Validation blocked: {entry.stats.validationIssues ?? 0}

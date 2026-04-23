@@ -10,12 +10,19 @@ import {
 } from "@/lib/neon";
 
 const STATE_BLOB_PATH = "dpp-product-feed-sync/operator-state.json";
+const LIVE_OFFER_INDEX_BLOB_PATH =
+  "dpp-product-feed-sync/live-offer-index.json";
 const RUN_ARTIFACT_BLOB_PREFIX = "dpp-product-feed-sync/run-artifacts";
 const PREVIEW_EXPORT_BLOB_PREFIX = "dpp-product-feed-sync/preview-exports";
 const LOCAL_STATE_PATH = path.join(
   process.cwd(),
   ".local-state",
   "operator-state.json",
+);
+const LOCAL_LIVE_OFFER_INDEX_PATH = path.join(
+  process.cwd(),
+  ".local-state",
+  "live-offer-index.json",
 );
 const LOCAL_RUN_ARTIFACT_DIR = path.join(
   process.cwd(),
@@ -29,9 +36,13 @@ const LOCAL_PREVIEW_EXPORT_DIR = path.join(
 );
 const NEON_STATE_KEY = "state";
 const NEON_STATE_KIND = "operator-state";
+const NEON_LIVE_OFFER_INDEX_KEY = "live-offer-index";
+const NEON_LIVE_OFFER_INDEX_KIND = "live-offer-index";
 const NEON_RUN_ARTIFACT_PREFIX = "run-artifact";
 const NEON_PREVIEW_EXPORT_PREFIX = "preview-export";
 const HISTORY_LIMIT = 50;
+const LIVE_OFFER_INDEX_LIMIT = 100_000;
+const CRON_INVOCATION_LIMIT = 30;
 const RETAINED_SYNC_HISTORY_BY_MODE: Record<SyncHistoryEntry["mode"], number> = {
   delta: 5,
   full: 1,
@@ -80,7 +91,39 @@ export interface SyncHistoryEntry {
     excluded: number;
     validationIssues?: number;
     previewLimit: number;
+    merchantUpsertsAttempted?: number;
+    merchantUpsertsSucceeded?: number;
+    merchantDeletesAttempted?: number;
+    merchantDeletesSucceeded?: number;
+    merchantReconciliationDeletes?: number;
+    merchantWriteErrors?: number;
   };
+}
+
+export interface LiveOfferIndexRecord {
+  dataSourceName: string;
+  keys: string[];
+  updatedAt: string;
+  source: "merchant_scan" | "full_success" | "delta_success";
+}
+
+export interface CronInvocationEntry {
+  id: string;
+  firedAt: string;
+  path: string;
+  userAgent: string | null;
+  authorizationPresent: boolean;
+  authorized: boolean;
+  decisionMode: "idle" | "delta" | "full" | null;
+  outcome:
+    | "queued"
+    | "skipped_idle"
+    | "skipped_duplicate"
+    | "skipped_active_run"
+    | "unauthorized"
+    | "failed";
+  runId?: string | null;
+  message: string;
 }
 
 export interface PendingShopifyDeleteRecord {
@@ -135,6 +178,7 @@ interface OperatorState {
   settings: SyncSettings;
   history: SyncHistoryEntry[];
   pendingDeletes: PendingShopifyDeleteRecord[];
+  cronInvocations: CronInvocationEntry[];
   bootstrap: BootstrapState;
   activeSyncRun: ActiveSyncRunState | null;
 }
@@ -143,6 +187,7 @@ type StorageMode = "neon" | "blob" | "local" | "memory";
 
 declare global {
   var __dppOperatorState: OperatorState | undefined;
+  var __dppLiveOfferIndex: LiveOfferIndexRecord | null | undefined;
   var __dppRunArtifacts: Record<string, unknown> | undefined;
 }
 
@@ -164,6 +209,7 @@ function defaultState(): OperatorState {
     settings: defaultSettings(),
     history: [],
     pendingDeletes: [],
+    cronInvocations: [],
     bootstrap: {
       firstFullSyncCompletedAt: null,
     },
@@ -205,6 +251,40 @@ function sanitizeSettings(input: Partial<SyncSettings> | null | undefined) {
   } satisfies SyncSettings;
 }
 
+function sanitizeLiveOfferIndex(
+  input: Partial<LiveOfferIndexRecord> | null | undefined,
+) {
+  if (!input?.dataSourceName) {
+    return null;
+  }
+
+  const seenKeys = new Set<string>();
+  const keys: string[] = [];
+
+  for (const value of input.keys ?? []) {
+    if (typeof value !== "string" || !value || seenKeys.has(value)) {
+      continue;
+    }
+
+    seenKeys.add(value);
+    keys.push(value);
+
+    if (keys.length >= LIVE_OFFER_INDEX_LIMIT) {
+      break;
+    }
+  }
+
+  return {
+    dataSourceName: input.dataSourceName,
+    keys,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    source:
+      input.source === "full_success" || input.source === "delta_success"
+        ? input.source
+        : "merchant_scan",
+  } satisfies LiveOfferIndexRecord;
+}
+
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   const history = Array.isArray(input?.history)
     ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
@@ -219,8 +299,45 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
         stats: {
           ...entry.stats,
           validationIssues: entry.stats?.validationIssues ?? 0,
+          merchantUpsertsAttempted: entry.stats?.merchantUpsertsAttempted ?? 0,
+          merchantUpsertsSucceeded: entry.stats?.merchantUpsertsSucceeded ?? 0,
+          merchantDeletesAttempted: entry.stats?.merchantDeletesAttempted ?? 0,
+          merchantDeletesSucceeded: entry.stats?.merchantDeletesSucceeded ?? 0,
+          merchantReconciliationDeletes:
+            entry.stats?.merchantReconciliationDeletes ?? 0,
+          merchantWriteErrors: entry.stats?.merchantWriteErrors ?? 0,
         },
       }))
+    : [];
+  const cronInvocations = Array.isArray(input?.cronInvocations)
+    ? input.cronInvocations
+        .map((entry) => ({
+          id: entry.id ?? `${entry.firedAt ?? new Date().toISOString()}-${entry.outcome ?? "unknown"}`,
+          firedAt: entry.firedAt ?? new Date().toISOString(),
+          path: entry.path ?? "/api/cron/sync",
+          userAgent: entry.userAgent ?? null,
+          authorizationPresent: Boolean(entry.authorizationPresent),
+          authorized: Boolean(entry.authorized),
+          decisionMode:
+            entry.decisionMode === "idle" ||
+            entry.decisionMode === "delta" ||
+            entry.decisionMode === "full"
+              ? entry.decisionMode
+              : null,
+          outcome:
+            entry.outcome === "queued" ||
+            entry.outcome === "skipped_idle" ||
+            entry.outcome === "skipped_duplicate" ||
+            entry.outcome === "skipped_active_run" ||
+            entry.outcome === "unauthorized" ||
+            entry.outcome === "failed"
+              ? entry.outcome
+              : "failed",
+          runId: entry.runId ?? null,
+          message: entry.message ?? "",
+        }))
+        .sort((left, right) => right.firedAt.localeCompare(left.firedAt))
+        .slice(0, CRON_INVOCATION_LIMIT)
     : [];
 
   return {
@@ -247,6 +364,7 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
             shopDomain: entry.shopDomain ?? null,
           }))
       : [],
+    cronInvocations,
     bootstrap: {
       firstFullSyncCompletedAt:
         input?.bootstrap?.firstFullSyncCompletedAt ??
@@ -442,6 +560,50 @@ async function writeNeonState(state: OperatorState) {
   await writeNeonObject(NEON_STATE_KEY, NEON_STATE_KIND, state);
 }
 
+async function readNeonLiveOfferIndexRaw() {
+  const index = await readNeonObject<Partial<LiveOfferIndexRecord>>(
+    NEON_LIVE_OFFER_INDEX_KEY,
+  );
+  return sanitizeLiveOfferIndex(index);
+}
+
+async function readFallbackLiveOfferIndexForNeon() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    return readBlobLiveOfferIndex();
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return readLocalLiveOfferIndex();
+  }
+
+  return readMemoryLiveOfferIndex();
+}
+
+async function readNeonLiveOfferIndex() {
+  const existing = await readNeonLiveOfferIndexRaw();
+
+  if (existing) {
+    return existing;
+  }
+
+  const fallbackIndex = await readFallbackLiveOfferIndexForNeon();
+
+  if (!fallbackIndex) {
+    return null;
+  }
+
+  await writeNeonLiveOfferIndex(fallbackIndex);
+  return fallbackIndex;
+}
+
+async function writeNeonLiveOfferIndex(index: LiveOfferIndexRecord) {
+  await writeNeonObject(
+    NEON_LIVE_OFFER_INDEX_KEY,
+    NEON_LIVE_OFFER_INDEX_KIND,
+    index,
+  );
+}
+
 async function readNeonArtifact<T>(id: string) {
   return readNeonObject<T>(getNeonRunArtifactKey(id));
 }
@@ -510,6 +672,35 @@ async function writeBlobArtifact(id: string, artifact: unknown) {
   });
 }
 
+async function readBlobLiveOfferIndex() {
+  const result = await get(LIVE_OFFER_INDEX_BLOB_PATH, {
+    access: "private",
+    useCache: false,
+  });
+
+  if (!result || result.statusCode !== 200) {
+    return null;
+  }
+
+  const text = await new Response(result.stream).text();
+  return sanitizeLiveOfferIndex(
+    safeJsonParse<Partial<LiveOfferIndexRecord> | null>(
+      text,
+      null,
+      LIVE_OFFER_INDEX_BLOB_PATH,
+    ),
+  );
+}
+
+async function writeBlobLiveOfferIndex(index: LiveOfferIndexRecord) {
+  await put(LIVE_OFFER_INDEX_BLOB_PATH, JSON.stringify(index, null, 2), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+  });
+}
+
 async function deleteBlobArtifact(id: string) {
   try {
     await del(getRunArtifactBlobPath(id));
@@ -532,6 +723,30 @@ async function readLocalState() {
 async function writeLocalState(state: OperatorState) {
   await mkdir(path.dirname(LOCAL_STATE_PATH), { recursive: true });
   await writeFile(LOCAL_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+}
+
+async function readLocalLiveOfferIndex() {
+  try {
+    const raw = await readFile(LOCAL_LIVE_OFFER_INDEX_PATH, "utf8");
+    return sanitizeLiveOfferIndex(
+      safeJsonParse<Partial<LiveOfferIndexRecord> | null>(
+        raw,
+        null,
+        LOCAL_LIVE_OFFER_INDEX_PATH,
+      ),
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function writeLocalLiveOfferIndex(index: LiveOfferIndexRecord) {
+  await mkdir(path.dirname(LOCAL_LIVE_OFFER_INDEX_PATH), { recursive: true });
+  await writeFile(
+    LOCAL_LIVE_OFFER_INDEX_PATH,
+    JSON.stringify(index, null, 2),
+    "utf8",
+  );
 }
 
 async function readLocalArtifact<T>(id: string) {
@@ -566,6 +781,14 @@ async function readMemoryState() {
 
 async function writeMemoryState(state: OperatorState) {
   globalThis.__dppOperatorState = state;
+}
+
+async function readMemoryLiveOfferIndex() {
+  return globalThis.__dppLiveOfferIndex ?? null;
+}
+
+async function writeMemoryLiveOfferIndex(index: LiveOfferIndexRecord) {
+  globalThis.__dppLiveOfferIndex = index;
 }
 
 async function readMemoryArtifact<T>(id: string) {
@@ -626,6 +849,51 @@ async function writeState(state: OperatorState) {
   }
 
   await writeMemoryState(normalized);
+}
+
+async function readLiveOfferIndex() {
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    return readNeonLiveOfferIndex();
+  }
+
+  if (mode === "blob") {
+    return readBlobLiveOfferIndex();
+  }
+
+  if (mode === "local") {
+    return readLocalLiveOfferIndex();
+  }
+
+  return readMemoryLiveOfferIndex();
+}
+
+async function writeLiveOfferIndex(index: LiveOfferIndexRecord) {
+  const normalized = sanitizeLiveOfferIndex(index);
+
+  if (!normalized) {
+    throw new Error("Live offer index is missing its Merchant data source name.");
+  }
+
+  const mode = getStateStorageMode();
+
+  if (mode === "neon") {
+    await writeNeonLiveOfferIndex(normalized);
+    return;
+  }
+
+  if (mode === "blob") {
+    await writeBlobLiveOfferIndex(normalized);
+    return;
+  }
+
+  if (mode === "local") {
+    await writeLocalLiveOfferIndex(normalized);
+    return;
+  }
+
+  await writeMemoryLiveOfferIndex(normalized);
 }
 
 export function getOperatorStoreStatus() {
@@ -796,6 +1064,28 @@ export async function removePendingShopifyDeletes(
   return removed;
 }
 
+export async function getCronInvocations(limit = 10) {
+  const state = await readState();
+
+  return [...state.cronInvocations]
+    .sort((left, right) => right.firedAt.localeCompare(left.firedAt))
+    .slice(0, limit);
+}
+
+export async function appendCronInvocation(entry: CronInvocationEntry) {
+  const state = await readState();
+  const cronInvocations = [entry, ...state.cronInvocations]
+    .sort((left, right) => right.firedAt.localeCompare(left.firedAt))
+    .slice(0, CRON_INVOCATION_LIMIT);
+
+  await writeState({
+    ...state,
+    cronInvocations,
+  });
+
+  return entry;
+}
+
 export async function getLatestSuccessfulLiveSyncHistory() {
   const state = await readState();
 
@@ -810,6 +1100,36 @@ export async function getLatestSuccessfulLiveSyncHistory() {
           (entry.mode === "delta" || entry.mode === "full"),
       ) ?? null
   );
+}
+
+export async function getLiveOfferIndex(dataSourceName: string) {
+  const index = await readLiveOfferIndex();
+
+  if (!index || index.dataSourceName !== dataSourceName) {
+    return null;
+  }
+
+  return index;
+}
+
+export async function saveLiveOfferIndex(params: {
+  dataSourceName: string;
+  keys: string[];
+  source: LiveOfferIndexRecord["source"];
+}) {
+  const index = sanitizeLiveOfferIndex({
+    dataSourceName: params.dataSourceName,
+    keys: params.keys,
+    updatedAt: new Date().toISOString(),
+    source: params.source,
+  });
+
+  if (!index) {
+    throw new Error("Live offer index could not be saved.");
+  }
+
+  await writeLiveOfferIndex(index);
+  return index;
 }
 
 export async function seedSuccessfulLiveSyncBaseline(params: {

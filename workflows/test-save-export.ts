@@ -339,6 +339,7 @@ async function persistSuccessfulTestSaveStep(params: {
     validationSample: params.validationSample,
     excludedSample: params.excludedSample,
     deleteSample: params.deleteSample,
+    deleteSampleMode: "candidate",
     merchant: null,
   };
 

@@ -510,6 +510,7 @@ export interface SyncRunArtifact {
   validationSample: ExcludedPreviewSample[];
   excludedSample: ExcludedPreviewSample[];
   deleteSample?: DeletePreviewSample[];
+  deleteSampleMode?: "candidate" | "actual";
   merchant?: SyncRunResult["merchant"];
 }
 
@@ -3199,6 +3200,7 @@ export async function runSync(
         validationSample: previewRun.validationSamples,
         excludedSample: previewRun.excludedSamples,
         deleteSample: result.deleteSample ?? [],
+        deleteSampleMode: "candidate",
         merchant: result.merchant ?? null,
       };
 
@@ -3287,6 +3289,7 @@ export async function runSync(
         validationSample: [],
         excludedSample: [],
         deleteSample: [],
+        deleteSampleMode: "candidate",
       };
 
       await writeRunArtifact(artifactId, artifact);

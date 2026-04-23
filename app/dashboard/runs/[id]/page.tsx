@@ -53,6 +53,16 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
     notFound();
   }
 
+  const deleteSampleMode = artifact.deleteSampleMode ?? "candidate";
+  const deleteHeading =
+    deleteSampleMode === "candidate"
+      ? "Products that would be queued for Merchant delete calls"
+      : "Products sent to Merchant delete calls";
+  const deleteDescription =
+    deleteSampleMode === "candidate"
+      ? "Up to 250 potential delete rows are saved per run."
+      : "Up to 250 actual delete rows are saved per run.";
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
       <section className="glass-panel rounded-[2rem] px-6 py-8 md:px-10 md:py-10">
@@ -409,11 +419,11 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
               Delete Sample
             </p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-              Products queued for Merchant delete calls
+              {deleteHeading}
             </h2>
           </div>
           <p className="text-sm text-muted">
-            Up to 250 delete rows are saved per run.
+            {deleteDescription}
           </p>
         </div>
 

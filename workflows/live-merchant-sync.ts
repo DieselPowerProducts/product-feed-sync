@@ -192,6 +192,53 @@ function pushLimitedUniqueDeletePreviewSamples(
   }
 }
 
+function buildDeletePreviewLookup(params: {
+  targets: MerchantDeleteTarget[];
+  samples: DeletePreviewSample[];
+}) {
+  const lookup = new Map<string, DeletePreviewSample>();
+
+  params.targets.forEach((target, index) => {
+    const sample = params.samples[index];
+
+    if (!sample) {
+      return;
+    }
+
+    lookup.set(buildDeleteTargetKey(target), sample);
+  });
+
+  return lookup;
+}
+
+function filterLiveDeleteTargets(params: {
+  targets: MerchantDeleteTarget[];
+  samples: DeletePreviewSample[];
+  liveOfferKeys: Set<string>;
+}) {
+  const sampleLookup = buildDeletePreviewLookup(params);
+  const targets: MerchantDeleteTarget[] = [];
+  const samples: DeletePreviewSample[] = [];
+
+  for (const target of params.targets) {
+    const key = buildDeleteTargetKey(target);
+
+    if (!params.liveOfferKeys.has(key)) {
+      continue;
+    }
+
+    targets.push(target);
+    samples.push(
+      sampleLookup.get(key) ?? toDeletePreviewSample(target, "shopify_scan"),
+    );
+  }
+
+  return {
+    targets,
+    samples,
+  };
+}
+
 function createMerchantSummary(identity: MerchantIdentity): MerchantCatalogSyncSummary {
   return {
     accountName: identity.accountName,
@@ -491,6 +538,32 @@ async function loadPendingDeleteTargetsStep() {
   };
 }
 
+async function loadOrSeedLiveOfferIndexStep(dataSourceName: string) {
+  "use step";
+  const { getLiveOfferIndex, saveLiveOfferIndex } = await import(
+    "@/lib/operator-store"
+  );
+  const existing = await getLiveOfferIndex(dataSourceName);
+
+  if (existing) {
+    return existing;
+  }
+
+  console.log(
+    `[liveMerchantSyncWorkflow] seeding live offer index from Merchant data source=${dataSourceName}`,
+  );
+  const { listConfiguredDataSourceProducts } = await import(
+    "@/lib/google-merchant"
+  );
+  const currentProducts = await listConfiguredDataSourceProducts();
+
+  return saveLiveOfferIndex({
+    dataSourceName,
+    keys: currentProducts.map((target) => buildDeleteTargetKey(target)),
+    source: "merchant_scan",
+  });
+}
+
 async function initializeExportArtifactStep(params: {
   exportArtifactId: string;
   input: LiveMerchantSyncWorkflowInput;
@@ -710,6 +783,8 @@ async function persistSuccessfulRunStep(params: {
   exclusions: Record<string, number>;
   merchant: MerchantCatalogSyncSummary;
   pendingDeleteCount: number;
+  liveOfferKeys: string[];
+  liveOfferIndexDataSourceName: string;
 }) {
   "use step";
   const {
@@ -720,6 +795,7 @@ async function persistSuccessfulRunStep(params: {
   const {
     appendSyncHistory,
     readPreviewExportArtifact,
+    saveLiveOfferIndex,
     writePreviewExportArtifact,
     writeRunArtifact,
   } = await import("@/lib/operator-store");
@@ -832,6 +908,11 @@ async function persistSuccessfulRunStep(params: {
     merchant: params.merchant,
   } satisfies SyncRunResult;
 
+  await saveLiveOfferIndex({
+    dataSourceName: params.liveOfferIndexDataSourceName,
+    keys: params.liveOfferKeys,
+    source: params.input.mode === "full" ? "full_success" : "delta_success",
+  });
   await writePreviewExportArtifact(params.exportArtifactId, finalizedExport);
 
   const artifactId = result.startedAt.replaceAll(":", "-");
@@ -855,6 +936,7 @@ async function persistSuccessfulRunStep(params: {
     validationSample: params.validationSample,
     excludedSample: params.excludedSample,
     deleteSample: params.deleteSample,
+    deleteSampleMode: "actual",
     merchant: result.merchant ?? null,
   };
 
@@ -953,6 +1035,7 @@ async function persistFailedRunStep(params: {
     validationSample: [],
     excludedSample: [],
     deleteSample: [],
+    deleteSampleMode: "actual",
     merchant: null,
   };
 
@@ -995,6 +1078,16 @@ export async function liveMerchantSyncWorkflow(
     });
     const merchantIdentity = await loadMerchantIdentityStep();
     const pendingDeleteScope = await loadPendingDeleteTargetsStep();
+    const liveOfferKeys =
+      input.mode === "delta"
+        ? new Set(
+            (
+              await loadOrSeedLiveOfferIndexStep(
+                merchantIdentity.dataSourceName,
+              )
+            ).keys,
+          )
+        : null;
     const merchant = createMerchantSummary(merchantIdentity);
     await initializeExportArtifactStep({
       exportArtifactId,
@@ -1094,11 +1187,6 @@ export async function liveMerchantSyncWorkflow(
       pushLimitedMany(includedSample, chunk.includedSamples, INCLUDED_SAMPLE_LIMIT);
       pushLimitedMany(validationSample, chunk.validationSamples, EXCLUDED_SAMPLE_LIMIT);
       pushLimitedMany(excludedSample, chunk.excludedSamples, EXCLUDED_SAMPLE_LIMIT);
-      pushLimitedUniqueDeletePreviewSamples(
-        deleteSample,
-        deletePreviewKeys,
-        chunk.deleteSamples,
-      );
       await appendExportChunkStep({
         exportArtifactId,
         rows: chunk.rows,
@@ -1106,6 +1194,17 @@ export async function liveMerchantSyncWorkflow(
         validationRows: chunk.validationRows,
       });
       seenKeys.push(...chunk.rows.map((row) => buildDeleteTargetKey(row)));
+      const filteredChunkDeletes =
+        input.mode === "delta" && liveOfferKeys
+          ? filterLiveDeleteTargets({
+              targets: chunk.deleteCandidates,
+              samples: chunk.deleteSamples,
+              liveOfferKeys,
+            })
+          : {
+              targets: [] as MerchantDeleteTarget[],
+              samples: [] as DeletePreviewSample[],
+            };
 
       const progressBase = createProgressSnapshot({
         input,
@@ -1134,16 +1233,24 @@ export async function liveMerchantSyncWorkflow(
         upsertBatch.summary.errors,
         upsertBatch.summary.errorCount,
       );
+      if (liveOfferKeys) {
+        chunk.rows.forEach((row) => {
+          liveOfferKeys.add(buildDeleteTargetKey(row));
+        });
+      }
 
-      if (chunk.deleteCandidates.length) {
+      if (filteredChunkDeletes.targets.length) {
         const deleteBatch = await deleteChunkStep({
           runId,
           startedAt,
           progressBase,
-          targets: chunk.deleteCandidates,
+          targets: filteredChunkDeletes.targets,
         });
         merchant.deletesAttempted += deleteBatch.summary.attempted;
         merchant.deletesSucceeded += deleteBatch.summary.succeeded;
+        merchant.deleteTargetKeysSucceeded.push(
+          ...deleteBatch.summary.deleteTargetKeysSucceeded,
+        );
         mergeMerchantErrors(
           merchant,
           deleteBatch.summary.errors,
@@ -1154,6 +1261,16 @@ export async function liveMerchantSyncWorkflow(
           deleteBatch.summary.deleteTargetsSample,
           EXCLUDED_SAMPLE_LIMIT,
         );
+        pushLimitedUniqueDeletePreviewSamples(
+          deleteSample,
+          deletePreviewKeys,
+          filteredChunkDeletes.samples,
+        );
+        if (liveOfferKeys) {
+          deleteBatch.summary.deleteTargetKeysSucceeded.forEach((key) => {
+            liveOfferKeys.delete(key);
+          });
+        }
       }
 
       chunksCompleted += 1;
@@ -1338,6 +1455,9 @@ export async function liveMerchantSyncWorkflow(
         });
         merchant.deletesAttempted += deleteBatch.summary.attempted;
         merchant.deletesSucceeded += deleteBatch.summary.succeeded;
+        merchant.deleteTargetKeysSucceeded.push(
+          ...deleteBatch.summary.deleteTargetKeysSucceeded,
+        );
         mergeMerchantErrors(
           merchant,
           deleteBatch.summary.errors,
@@ -1394,6 +1514,9 @@ export async function liveMerchantSyncWorkflow(
       });
       merchant.deletesAttempted += deleteBatch.summary.attempted;
       merchant.deletesSucceeded += deleteBatch.summary.succeeded;
+      merchant.deleteTargetKeysSucceeded.push(
+        ...deleteBatch.summary.deleteTargetKeysSucceeded,
+      );
       mergeMerchantErrors(
         merchant,
         deleteBatch.summary.errors,
@@ -1409,6 +1532,11 @@ export async function liveMerchantSyncWorkflow(
         deletePreviewKeys,
         pendingDeleteScope.previewSamples,
       );
+      if (liveOfferKeys) {
+        deleteBatch.summary.deleteTargetKeysSucceeded.forEach((key) => {
+          liveOfferKeys.delete(key);
+        });
+      }
 
       if (deleteBatch.summary.deleteTargetKeysSucceeded.length) {
         await removeSucceededPendingDeletesStep(
@@ -1441,6 +1569,11 @@ export async function liveMerchantSyncWorkflow(
       exclusions,
       merchant,
       pendingDeleteCount: pendingDeleteScope.targets.length,
+      liveOfferKeys:
+        input.mode === "full"
+          ? Array.from(new Set(seenKeys))
+          : Array.from(liveOfferKeys ?? new Set<string>()),
+      liveOfferIndexDataSourceName: merchantIdentity.dataSourceName,
     });
 
     const completionProgress = createProgressSnapshot({
