@@ -21,6 +21,13 @@ import type {
 } from "@/lib/sync";
 import { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import { getConfigurationStatus } from "@/lib/env";
+import {
+  buildSyncBudgetProfile,
+  evaluateSyncBudget,
+  type SyncBudgetHistorySample,
+  type SyncBudgetSnapshot,
+  type SyncBudgetUsage,
+} from "@/lib/sync-budget";
 
 const DEFAULT_PREVIEW_LIMIT = 5;
 const LIVE_SYNC_CHUNK_PRODUCT_TARGET = 1500;
@@ -28,6 +35,7 @@ const INCLUDED_SAMPLE_LIMIT = 50;
 const EXCLUDED_SAMPLE_LIMIT = 250;
 const MERCHANT_ERROR_SAMPLE_LIMIT = 50;
 const LARGE_DELTA_PRODUCT_LIMIT_WITHOUT_FINGERPRINTS = 2500;
+const MERCHANT_RESULT_BUFFER_BYTES = 2048;
 
 export interface LiveMerchantSyncWorkflowInput {
   mode: "delta" | "full";
@@ -62,6 +70,7 @@ export interface LiveMerchantSyncWorkflowProgress {
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
   mode: "delta" | "full";
+  budget: SyncBudgetSnapshot | null;
 }
 
 export type LiveMerchantSyncWorkflowEvent =
@@ -83,6 +92,24 @@ type MerchantIdentity = {
   dataSourceName: string;
   authMode: NonNullable<MerchantCatalogSyncSummary["authMode"]>;
 };
+
+function estimateJsonBytes(value: unknown) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function createBudgetUsage(input: LiveMerchantSyncWorkflowInput): SyncBudgetUsage {
+  return {
+    mode: input.mode,
+    elapsedMs: 0,
+    totalProducts: null,
+    productsScanned: 0,
+    chunksCompleted: 0,
+    chunkTargetProducts: Math.max(1, input.chunkTargetProducts ?? LIVE_SYNC_CHUNK_PRODUCT_TARGET),
+    estimatedTransferBytes: 0,
+    neonOpsUsed: 0,
+    vercelFunctionsUsed: 0,
+  };
+}
 
 function buildDeleteTargetKey(
   target: Pick<MerchantDeleteTarget, "contentLanguage" | "feedLabel" | "offerId">,
@@ -145,14 +172,6 @@ function mergeExclusions(
   for (const [reason, count] of Object.entries(source)) {
     target[reason] = (target[reason] ?? 0) + count;
   }
-}
-
-function pushLimited<T>(items: T[], item: T, limit: number) {
-  if (items.length >= limit) {
-    return;
-  }
-
-  items.push(item);
 }
 
 function pushLimitedMany<T>(items: T[], values: T[], limit: number) {
@@ -314,6 +333,7 @@ function createProgressSnapshot(params: {
   controlState?: ActiveSyncRunState["controlState"];
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
+  budget: SyncBudgetSnapshot | null;
 }) {
   return {
     stage: params.stage,
@@ -338,6 +358,7 @@ function createProgressSnapshot(params: {
     lastChunkDurationMs: params.lastChunkDurationMs,
     averageChunkDurationMs: params.averageChunkDurationMs,
     mode: params.input.mode,
+    budget: params.budget,
   } satisfies LiveMerchantSyncWorkflowProgress;
 }
 
@@ -410,6 +431,7 @@ async function publishWorkflowEvent(
         controlState,
         lastChunkDurationMs: normalizedProgress.lastChunkDurationMs,
         averageChunkDurationMs: normalizedProgress.averageChunkDurationMs,
+        budget: normalizedProgress.budget ?? null,
       });
       normalizedProgress.controlState = controlState;
     } else if (status) {
@@ -541,6 +563,25 @@ async function loadPendingDeleteTargetsStep() {
   };
 }
 
+async function loadBudgetProfileStep(input: LiveMerchantSyncWorkflowInput) {
+  "use step";
+  const { getSyncHistory } = await import("@/lib/operator-store");
+  const history = (await getSyncHistory(20)) as SyncBudgetHistorySample[];
+  return buildSyncBudgetProfile({
+    mode: input.mode,
+    history,
+  });
+}
+
+async function requestBudgetPauseStep(runId: string, message: string) {
+  "use step";
+  const { updateActiveSyncRun } = await import("@/lib/operator-store");
+  await updateActiveSyncRun(runId, {
+    controlState: "pause_requested",
+    message,
+  });
+}
+
 async function loadOrSeedLiveOfferIndexStep(dataSourceName: string) {
   "use step";
   const { getLiveOfferIndex, saveLiveOfferIndex } = await import(
@@ -629,6 +670,7 @@ async function scanChunkStep(params: {
   return {
     ...chunk,
     durationMs: Date.now() - startedAt,
+    transferBytes: chunk.estimatedTransferBytes,
   };
 }
 
@@ -697,6 +739,10 @@ async function upsertChunkStep(params: {
   return {
     summary,
     durationMs: Date.now() - startedAt,
+    transferBytes:
+      estimateJsonBytes(params.records) +
+      estimateJsonBytes(summary.errors) +
+      MERCHANT_RESULT_BUFFER_BYTES,
   };
 }
 
@@ -747,6 +793,10 @@ async function deleteChunkStep(params: {
   return {
     summary,
     durationMs: Date.now() - startedAt,
+    transferBytes:
+      estimateJsonBytes(params.targets) +
+      estimateJsonBytes(summary.errors) +
+      MERCHANT_RESULT_BUFFER_BYTES,
   };
 }
 
@@ -758,7 +808,11 @@ async function scanReconciliationPageStep(pageToken: string | null) {
   const { listConfiguredDataSourceProductPage } = await import(
     "@/lib/google-merchant"
   );
-  return listConfiguredDataSourceProductPage(pageToken);
+  const page = await listConfiguredDataSourceProductPage(pageToken);
+  return {
+    ...page,
+    transferBytes: estimateJsonBytes(page),
+  };
 }
 
 async function removeSucceededPendingDeletesStep(
@@ -1119,6 +1173,11 @@ export async function liveMerchantSyncWorkflow(
   );
   const exportArtifactId = `live-sync-${input.mode}-${startedAt.replaceAll(":", "-")}`;
   let context: SyncExecutionContext | null = null;
+  const budgetUsage = createBudgetUsage({
+    ...input,
+    startedAt,
+    chunkTargetProducts,
+  });
 
   console.log(
     `[liveMerchantSyncWorkflow] start runId=${runId} mode=${input.mode} trigger=${input.trigger}`,
@@ -1126,6 +1185,11 @@ export async function liveMerchantSyncWorkflow(
 
   try {
     context = await loadExecutionContextStep({
+      ...input,
+      startedAt,
+      chunkTargetProducts,
+    });
+    const budgetProfile = await loadBudgetProfileStep({
       ...input,
       startedAt,
       chunkTargetProducts,
@@ -1181,8 +1245,77 @@ export async function liveMerchantSyncWorkflow(
     let chunksCompleted = 0;
     let lastChunkDurationMs: number | null = null;
     let averageChunkDurationMs: number | null = null;
+    budgetUsage.totalProducts = context.totalProducts;
+    budgetUsage.vercelFunctionsUsed += input.mode === "delta" ? 5 : 4;
+    budgetUsage.neonOpsUsed += input.mode === "delta" ? 5 : 4;
 
-    const initialProgress = createProgressSnapshot({
+    const buildBudgetSnapshot = () => {
+      budgetUsage.elapsedMs = Math.max(0, Date.now() - Date.parse(startedAt));
+      budgetUsage.totalProducts = context?.totalProducts ?? budgetUsage.totalProducts;
+      return evaluateSyncBudget({
+        profile: budgetProfile,
+        usage: budgetUsage,
+      });
+    };
+
+    const makeProgressSnapshot = (
+      params: Omit<
+        Parameters<typeof createProgressSnapshot>[0],
+        "budget"
+      >,
+    ) =>
+      createProgressSnapshot({
+        ...params,
+        budget: buildBudgetSnapshot(),
+      });
+
+    const noteProgressPublish = () => {
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 2;
+    };
+
+    const notePreviewExportChunkWrite = () => {
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 2;
+    };
+
+    const maybePauseForBudget = async (
+      progress: LiveMerchantSyncWorkflowProgress,
+    ) => {
+      if (progress.budget?.status !== "pause_requested") {
+        return;
+      }
+
+      const pauseMessage = progress.budget.pauseReason ?? progress.budget.summary;
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 1;
+      await requestBudgetPauseStep(runId, pauseMessage);
+
+      const pauseProgress = {
+        ...progress,
+        controlState: "pause_requested" as const,
+        message: pauseMessage,
+      } satisfies LiveMerchantSyncWorkflowProgress;
+
+      noteProgressPublish();
+      await publishWorkflowEvent(
+        runId,
+        {
+          type: "progress",
+          progress: pauseProgress,
+        },
+        pauseProgress,
+        undefined,
+        startedAt,
+      );
+      await waitForResumeIfPaused({
+        runId,
+        startedAt,
+        progress: pauseProgress,
+      });
+    };
+
+    const initialProgress = makeProgressSnapshot({
       input,
       startedAt,
       chunkTargetProducts,
@@ -1204,6 +1337,7 @@ export async function liveMerchantSyncWorkflow(
       lastChunkDurationMs,
       averageChunkDurationMs,
     });
+    noteProgressPublish();
     await publishWorkflowEvent(
       runId,
       {
@@ -1216,7 +1350,7 @@ export async function liveMerchantSyncWorkflow(
     );
 
     while (!scanCompleted) {
-      const scanningProgress = createProgressSnapshot({
+      const scanningProgress = makeProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1242,11 +1376,13 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      await maybePauseForBudget(scanningProgress);
       await waitForResumeIfPaused({
         runId,
         startedAt,
         progress: scanningProgress,
       });
+      noteProgressPublish();
       await publishWorkflowEvent(
         runId,
         {
@@ -1258,21 +1394,25 @@ export async function liveMerchantSyncWorkflow(
         startedAt,
       );
 
+      budgetUsage.vercelFunctionsUsed += 1;
       const chunk = await scanChunkStep({
         context,
         cursor,
         chunkTargetProducts,
       });
+      budgetUsage.estimatedTransferBytes += chunk.transferBytes;
       cursor = chunk.nextCursor;
       scanCompleted = chunk.scanCompleted;
       pagesScanned += chunk.pagesScanned;
       productsFetched += chunk.productsFetched;
+      budgetUsage.productsScanned = productsFetched;
       variantsConsidered += chunk.variantsConsidered;
       recordsPrepared += chunk.recordsPrepared;
       mergeExclusions(exclusions, chunk.exclusions);
       pushLimitedMany(includedSample, chunk.includedSamples, INCLUDED_SAMPLE_LIMIT);
       pushLimitedMany(validationSample, chunk.validationSamples, EXCLUDED_SAMPLE_LIMIT);
       pushLimitedMany(excludedSample, chunk.excludedSamples, EXCLUDED_SAMPLE_LIMIT);
+      notePreviewExportChunkWrite();
       await appendExportChunkStep({
         exportArtifactId,
         rows: chunk.rows,
@@ -1316,7 +1456,7 @@ export async function liveMerchantSyncWorkflow(
               samples: [] as DeletePreviewSample[],
             };
 
-      const progressBase = createProgressSnapshot({
+      const progressBase = makeProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1331,13 +1471,16 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      await maybePauseForBudget(progressBase);
 
+      budgetUsage.vercelFunctionsUsed += 1;
       const upsertBatch = await upsertChunkStep({
         runId,
         startedAt,
         progressBase,
         records: rowsToUpsert,
       });
+      budgetUsage.estimatedTransferBytes += upsertBatch.transferBytes;
       merchant.upsertsAttempted += upsertBatch.summary.attempted;
       merchant.upsertsSucceeded += upsertBatch.summary.succeeded;
       mergeMerchantErrors(
@@ -1359,12 +1502,14 @@ export async function liveMerchantSyncWorkflow(
       }
 
       if (filteredChunkDeletes.targets.length) {
+        budgetUsage.vercelFunctionsUsed += 1;
         const deleteBatch = await deleteChunkStep({
           runId,
           startedAt,
           progressBase,
           targets: filteredChunkDeletes.targets,
         });
+        budgetUsage.estimatedTransferBytes += deleteBatch.transferBytes;
         merchant.deletesAttempted += deleteBatch.summary.attempted;
         merchant.deletesSucceeded += deleteBatch.summary.succeeded;
         merchant.deleteTargetKeysSucceeded.push(
@@ -1403,10 +1548,11 @@ export async function liveMerchantSyncWorkflow(
         previousAverageMs: averageChunkDurationMs,
         currentChunkMs: chunk.durationMs + upsertBatch.durationMs,
       });
+      budgetUsage.chunksCompleted = chunksCompleted;
       lastChunkDurationMs = chunkDurationStats.lastChunkDurationMs;
       averageChunkDurationMs = chunkDurationStats.averageChunkDurationMs;
 
-      const chunkCompletedProgress = createProgressSnapshot({
+      const chunkCompletedProgress = makeProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1421,6 +1567,7 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      noteProgressPublish();
       await publishWorkflowEvent(
         runId,
         {
@@ -1442,7 +1589,7 @@ export async function liveMerchantSyncWorkflow(
       let merchantMatchedRows = 0;
       let merchantDeleteTargets = 0;
 
-      let reconcilingProgress = createProgressSnapshot({
+      let reconcilingProgress = makeProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1464,6 +1611,7 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      noteProgressPublish();
       await publishWorkflowEvent(
         runId,
         {
@@ -1476,12 +1624,15 @@ export async function liveMerchantSyncWorkflow(
       );
 
       while (true) {
+        await maybePauseForBudget(reconcilingProgress);
         await waitForResumeIfPaused({
           runId,
           startedAt,
           progress: reconcilingProgress,
         });
+        budgetUsage.vercelFunctionsUsed += 1;
         const page = await scanReconciliationPageStep(reconciliationPageToken);
+        budgetUsage.estimatedTransferBytes += page.transferBytes;
         reconciliationPageToken = page.nextPageToken;
         merchantPagesScanned += 1;
         merchantRowsScanned += page.rowsScanned;
@@ -1493,7 +1644,7 @@ export async function liveMerchantSyncWorkflow(
         merchantDeleteTargets += pageTargets.length;
         reconciliationTargets.push(...pageTargets);
 
-        reconcilingProgress = createProgressSnapshot({
+        reconcilingProgress = makeProgressSnapshot({
           input,
           startedAt,
           chunkTargetProducts,
@@ -1516,6 +1667,7 @@ export async function liveMerchantSyncWorkflow(
           lastChunkDurationMs,
           averageChunkDurationMs,
         });
+        noteProgressPublish();
         await publishWorkflowEvent(
           runId,
           {
@@ -1544,9 +1696,9 @@ export async function liveMerchantSyncWorkflow(
           index,
           index + chunkTargetProducts,
         );
-        const progressBase = createProgressSnapshot({
-          input,
-          startedAt,
+          const progressBase = makeProgressSnapshot({
+            input,
+            startedAt,
           chunkTargetProducts,
           chunksCompleted,
           totalProducts: context.totalProducts,
@@ -1563,21 +1715,24 @@ export async function liveMerchantSyncWorkflow(
           merchantRowsScanned,
           merchantMatchedRows,
           merchantDeleteTargets,
-          lastChunkDurationMs,
-          averageChunkDurationMs,
-        });
-        await waitForResumeIfPaused({
-          runId,
-          startedAt,
-          progress: progressBase,
-        });
-        const deleteBatch = await deleteChunkStep({
-          runId,
-          startedAt,
-          progressBase,
-          targets: reconciliationChunk,
-        });
-        merchant.deletesAttempted += deleteBatch.summary.attempted;
+            lastChunkDurationMs,
+            averageChunkDurationMs,
+          });
+          await maybePauseForBudget(progressBase);
+          await waitForResumeIfPaused({
+            runId,
+            startedAt,
+            progress: progressBase,
+          });
+          budgetUsage.vercelFunctionsUsed += 1;
+          const deleteBatch = await deleteChunkStep({
+            runId,
+            startedAt,
+            progressBase,
+            targets: reconciliationChunk,
+          });
+          budgetUsage.estimatedTransferBytes += deleteBatch.transferBytes;
+          merchant.deletesAttempted += deleteBatch.summary.attempted;
         merchant.deletesSucceeded += deleteBatch.summary.succeeded;
         merchant.deleteTargetKeysSucceeded.push(
           ...deleteBatch.summary.deleteTargetKeysSucceeded,
@@ -1603,7 +1758,7 @@ export async function liveMerchantSyncWorkflow(
     }
 
     if (pendingDeleteScope.targets.length) {
-      const progressBase = createProgressSnapshot({
+      const progressBase = makeProgressSnapshot({
         input,
         startedAt,
         chunkTargetProducts,
@@ -1625,17 +1780,20 @@ export async function liveMerchantSyncWorkflow(
         lastChunkDurationMs,
         averageChunkDurationMs,
       });
+      await maybePauseForBudget(progressBase);
       await waitForResumeIfPaused({
         runId,
         startedAt,
         progress: progressBase,
       });
+      budgetUsage.vercelFunctionsUsed += 1;
       const deleteBatch = await deleteChunkStep({
         runId,
         startedAt,
         progressBase,
         targets: pendingDeleteScope.targets,
       });
+      budgetUsage.estimatedTransferBytes += deleteBatch.transferBytes;
       merchant.deletesAttempted += deleteBatch.summary.attempted;
       merchant.deletesSucceeded += deleteBatch.summary.succeeded;
       merchant.deleteTargetKeysSucceeded.push(
@@ -1668,6 +1826,8 @@ export async function liveMerchantSyncWorkflow(
       }
 
       if (deleteBatch.summary.deleteTargetKeysSucceeded.length) {
+        budgetUsage.vercelFunctionsUsed += 1;
+        budgetUsage.neonOpsUsed += 1;
         await removeSucceededPendingDeletesStep(
           pendingDeleteScope.targets.filter((target) =>
             deleteBatch.summary.deleteTargetKeysSucceeded.includes(
@@ -1678,6 +1838,8 @@ export async function liveMerchantSyncWorkflow(
       }
     }
 
+    budgetUsage.vercelFunctionsUsed += 1;
+    budgetUsage.neonOpsUsed += 2;
     const result = await persistSuccessfulRunStep({
       runId,
       input: {
@@ -1715,13 +1877,15 @@ export async function liveMerchantSyncWorkflow(
       context.searchPlan.source === "webhook_queue" &&
       (context.searchPlan.productIds?.length ?? 0) > 0
     ) {
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 1;
       await removeSucceededPendingUpsertsStep(
         context.searchPlan.productIds ?? [],
         startedAt,
       );
     }
 
-    const completionProgress = createProgressSnapshot({
+    const completionProgress = makeProgressSnapshot({
       input,
       startedAt,
       chunkTargetProducts,
@@ -1737,6 +1901,7 @@ export async function liveMerchantSyncWorkflow(
       lastChunkDurationMs,
       averageChunkDurationMs,
     });
+    noteProgressPublish();
     await publishWorkflowEvent(
       runId,
       {
@@ -1760,12 +1925,16 @@ export async function liveMerchantSyncWorkflow(
       undefined,
       result.ok ? "completed" : "failed",
     );
+    budgetUsage.vercelFunctionsUsed += 1;
+    budgetUsage.neonOpsUsed += 1;
     await cleanupActiveRunStep(runId);
 
     return result;
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown chunked sync execution error.";
+    budgetUsage.vercelFunctionsUsed += 1;
+    budgetUsage.neonOpsUsed += 2;
     const failure = await persistFailedRunStep({
       runId,
       input: {
@@ -1791,6 +1960,8 @@ export async function liveMerchantSyncWorkflow(
       undefined,
       "failed",
     );
+    budgetUsage.vercelFunctionsUsed += 1;
+    budgetUsage.neonOpsUsed += 1;
     await cleanupActiveRunStep(runId);
     return failure;
   }

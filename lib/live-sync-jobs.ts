@@ -82,6 +82,7 @@ async function setQueuedActiveRun(params: {
     merchantDeleteTargets: 0,
     lastChunkDurationMs: null,
     averageChunkDurationMs: null,
+    budget: null,
   });
 }
 

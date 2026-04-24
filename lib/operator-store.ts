@@ -2,6 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { del, get, put } from "@vercel/blob";
 import { env } from "@/lib/env";
+import type { SyncBudgetSnapshot } from "@/lib/sync-budget";
 import {
   deleteNeonObject,
   deleteNeonObjects,
@@ -193,6 +194,7 @@ export interface ActiveSyncRunState {
   merchantDeleteTargets: number;
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
+  budget: SyncBudgetSnapshot | null;
 }
 
 interface BootstrapState {
@@ -369,6 +371,66 @@ function sanitizePendingShopifyDeleteRecord(
   } satisfies PendingShopifyDeleteRecord;
 }
 
+function sanitizeSyncBudgetSnapshot(
+  input: Partial<SyncBudgetSnapshot> | null | undefined,
+) {
+  if (!input) {
+    return null;
+  }
+
+  return {
+    sampleSize: Math.max(0, Number(input.sampleSize ?? 0)),
+    status:
+      input.status === "warning" || input.status === "pause_requested"
+        ? input.status
+        : "ok",
+    summary: input.summary ?? "",
+    pauseReason: input.pauseReason ?? null,
+    expectedDurationMs:
+      typeof input.expectedDurationMs === "number" &&
+      Number.isFinite(input.expectedDurationMs)
+        ? input.expectedDurationMs
+        : null,
+    warningDurationMs:
+      typeof input.warningDurationMs === "number" &&
+      Number.isFinite(input.warningDurationMs)
+        ? input.warningDurationMs
+        : null,
+    pauseDurationMs:
+      typeof input.pauseDurationMs === "number" &&
+      Number.isFinite(input.pauseDurationMs)
+        ? input.pauseDurationMs
+        : null,
+    projectedDurationMs:
+      typeof input.projectedDurationMs === "number" &&
+      Number.isFinite(input.projectedDurationMs)
+        ? input.projectedDurationMs
+        : null,
+    throughputProductsPerMinute:
+      typeof input.throughputProductsPerMinute === "number" &&
+      Number.isFinite(input.throughputProductsPerMinute)
+        ? input.throughputProductsPerMinute
+        : null,
+    throughputFloorProductsPerMinute:
+      typeof input.throughputFloorProductsPerMinute === "number" &&
+      Number.isFinite(input.throughputFloorProductsPerMinute)
+        ? input.throughputFloorProductsPerMinute
+        : null,
+    neonOpsUsed: Math.max(0, Number(input.neonOpsUsed ?? 0)),
+    neonOpsBudget: Math.max(0, Number(input.neonOpsBudget ?? 0)),
+    neonOpsProjected: Math.max(0, Number(input.neonOpsProjected ?? 0)),
+    vercelFunctionsUsed: Math.max(0, Number(input.vercelFunctionsUsed ?? 0)),
+    vercelFunctionsBudget: Math.max(0, Number(input.vercelFunctionsBudget ?? 0)),
+    vercelFunctionsProjected: Math.max(
+      0,
+      Number(input.vercelFunctionsProjected ?? 0),
+    ),
+    transferUsedMb: Math.max(0, Number(input.transferUsedMb ?? 0)),
+    transferBudgetMb: Math.max(0, Number(input.transferBudgetMb ?? 0)),
+    transferProjectedMb: Math.max(0, Number(input.transferProjectedMb ?? 0)),
+  } satisfies SyncBudgetSnapshot;
+}
+
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   const history = Array.isArray(input?.history)
     ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
@@ -530,6 +592,7 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
               Number.isFinite(input.activeSyncRun.averageChunkDurationMs)
                 ? input.activeSyncRun.averageChunkDurationMs
                 : null,
+            budget: sanitizeSyncBudgetSnapshot(input.activeSyncRun.budget),
           }
         : null,
   } satisfies OperatorState;

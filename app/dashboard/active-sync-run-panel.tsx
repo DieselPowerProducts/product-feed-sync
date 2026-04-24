@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ActiveSyncRunState } from "@/lib/operator-store";
+import type { SyncBudgetSnapshot } from "@/lib/sync-budget";
 
 const STREAM_RECONNECT_DELAY_MS = 1500;
 
@@ -29,6 +30,7 @@ type LiveSyncProgress = {
   lastChunkDurationMs: number | null;
   averageChunkDurationMs: number | null;
   mode: "delta" | "full";
+  budget: SyncBudgetSnapshot | null;
 };
 
 type LiveSyncResult = {
@@ -175,6 +177,14 @@ function progressSummary(progress: LiveSyncProgress | null) {
   return `${progress.productsScanned.toLocaleString()} Shopify products scanned`;
 }
 
+function formatMetricRatio(value: number, budget: number, suffix = "") {
+  return `${value.toLocaleString()} / ${budget.toLocaleString()}${suffix}`;
+}
+
+function formatDecimalRatio(value: number, budget: number, suffix = "") {
+  return `${value.toFixed(1)} / ${budget.toFixed(1)}${suffix}`;
+}
+
 function toInitialProgress(run: ActiveSyncRunState): LiveSyncProgress {
   return {
     stage: run.merchantPhase
@@ -203,6 +213,7 @@ function toInitialProgress(run: ActiveSyncRunState): LiveSyncProgress {
     lastChunkDurationMs: run.lastChunkDurationMs,
     averageChunkDurationMs: run.averageChunkDurationMs,
     mode: run.mode,
+    budget: run.budget,
   };
 }
 
@@ -224,29 +235,7 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
     setProgress(toInitialProgress(props.initialRun));
   }, [props.initialRun]);
 
-  useEffect(() => {
-    connectToRun(props.initialRun.runId);
-
-    return () => {
-      eventSourceRef.current?.close();
-
-      if (reconnectTimeoutRef.current) {
-        window.clearTimeout(reconnectTimeoutRef.current);
-      }
-    };
-  }, [props.initialRun.runId]);
-
-  function scheduleReconnect(nextRunId: string) {
-    if (reconnectTimeoutRef.current) {
-      window.clearTimeout(reconnectTimeoutRef.current);
-    }
-
-    reconnectTimeoutRef.current = window.setTimeout(() => {
-      connectToRun(nextRunId, true);
-    }, STREAM_RECONNECT_DELAY_MS);
-  }
-
-  function connectToRun(nextRunId: string, reconnecting = false) {
+  const connectToRun = useEffectEvent((nextRunId: string, reconnecting = false) => {
     eventSourceRef.current?.close();
 
     const searchParams = new URLSearchParams({
@@ -292,7 +281,29 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
       setError("The live sync status stream disconnected. Reconnecting now.");
       scheduleReconnect(nextRunId);
     };
-  }
+  });
+
+  const scheduleReconnect = useEffectEvent((nextRunId: string) => {
+    if (reconnectTimeoutRef.current) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+    }
+
+    reconnectTimeoutRef.current = window.setTimeout(() => {
+      connectToRun(nextRunId, true);
+    }, STREAM_RECONNECT_DELAY_MS);
+  });
+
+  useEffect(() => {
+    connectToRun(props.initialRun.runId);
+
+    return () => {
+      eventSourceRef.current?.close();
+
+      if (reconnectTimeoutRef.current) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [props.initialRun.runId]);
 
   async function sendControl(action: "pause" | "resume") {
     setIsControlPending(true);
@@ -340,6 +351,7 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
 
   const progressPercent = approximateProgress(progress);
   const controlState = progress.controlState ?? props.initialRun.controlState;
+  const budget = progress.budget;
   const phaseLabel = useMemo(() => {
     if (progress.merchantPhase === "reconciling") {
       return "Reconciling";
@@ -437,6 +449,30 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
           <span>{progressSummary(progress)}</span>
         </div>
 
+        {budget ? (
+          <div
+            className={
+              budget.status === "pause_requested"
+                ? "rounded-[1rem] border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-3 text-sm leading-7 text-[#7d3d10]"
+                : budget.status === "warning"
+                  ? "rounded-[1rem] border border-[rgba(197,92,22,0.18)] bg-[rgba(197,92,22,0.08)] px-4 py-3 text-sm leading-7 text-accent-strong"
+                  : "rounded-[1rem] border border-line/70 bg-white/70 px-4 py-3 text-sm leading-7 text-muted"
+            }
+          >
+            <p className="font-semibold text-foreground">Run budget guard</p>
+            <p className="mt-2">{budget.summary}</p>
+            {budget.pauseReason ? <p className="mt-2">{budget.pauseReason}</p> : null}
+            <p className="mt-3 text-xs font-mono uppercase tracking-[0.16em]">
+              History sample: {budget.sampleSize.toLocaleString()} successful live{" "}
+              {progress.mode} run{budget.sampleSize === 1 ? "" : "s"}
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              App-side budget guard from recent runs and current payload size, not a
+              direct provider billing meter.
+            </p>
+          </div>
+        ) : null}
+
         <div className="grid gap-2 rounded-[1rem] border border-line/70 bg-white/70 px-4 py-3 text-xs text-muted md:grid-cols-4">
           <div>
             <p className="font-mono uppercase tracking-[0.18em]">Elapsed</p>
@@ -463,6 +499,93 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
             </p>
           </div>
         </div>
+
+        {budget ? (
+          <div className="grid gap-2 rounded-[1rem] border border-line/70 bg-white/70 px-4 py-3 text-xs text-muted md:grid-cols-4">
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Projected finish
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {formatDuration(budget.projectedDurationMs)} /{" "}
+                {formatDuration(budget.pauseDurationMs)}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Neon state est.
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {formatMetricRatio(
+                  budget.neonOpsProjected,
+                  budget.neonOpsBudget,
+                )}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Vercel activity est.
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {formatMetricRatio(
+                  budget.vercelFunctionsProjected,
+                  budget.vercelFunctionsBudget,
+                )}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Transfer est.
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {formatDecimalRatio(
+                  budget.transferProjectedMb,
+                  budget.transferBudgetMb,
+                  " MB",
+                )}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {budget ? (
+          <div className="grid gap-2 rounded-[1rem] border border-line/70 bg-white/70 px-4 py-3 text-xs text-muted md:grid-cols-4">
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Throughput now
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {budget.throughputProductsPerMinute
+                  ? `${budget.throughputProductsPerMinute.toFixed(1)} / ${budget.throughputFloorProductsPerMinute?.toFixed(1) ?? "0.0"} prod/min`
+                  : "Warming up"}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Neon state used
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {budget.neonOpsUsed.toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Vercel activity used
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {budget.vercelFunctionsUsed.toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="font-mono uppercase tracking-[0.18em]">
+                Transfer used
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {budget.transferUsedMb.toFixed(1)} MB
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         {progress.merchantPhase === "reconciling" ? (
           <div className="grid gap-2 rounded-[1rem] border border-line/70 bg-white/70 px-4 py-3 text-xs text-muted md:grid-cols-4">

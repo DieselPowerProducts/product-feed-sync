@@ -615,6 +615,7 @@ export interface SyncChunkScanResult {
   productsEvaluated: number;
   variantsConsidered: number;
   recordsPrepared: number;
+  estimatedTransferBytes: number;
   rows: FeedPreviewRecord[];
   includedSamples: FeedPreviewRecord[];
   excludedRows: ExcludedPreviewSample[];
@@ -2254,6 +2255,7 @@ export async function scanSyncExecutionChunk(params: {
   let recordsPrepared = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
+  let estimatedTransferBytes = 0;
 
   if (params.context.searchPlan.source === "webhook_queue") {
     const queuedProductIds = params.context.searchPlan.productIds ?? [];
@@ -2275,6 +2277,7 @@ export async function scanSyncExecutionChunk(params: {
         productsEvaluated: 0,
         variantsConsidered: 0,
         recordsPrepared: 0,
+        estimatedTransferBytes: 0,
         rows,
         includedSamples,
         excludedRows,
@@ -2305,6 +2308,7 @@ export async function scanSyncExecutionChunk(params: {
       productsEvaluated: processed.productsEvaluated,
       variantsConsidered: processed.variantsConsidered,
       recordsPrepared: processed.recordsPrepared,
+      estimatedTransferBytes: 0,
       rows: processed.rows,
       includedSamples: processed.includedSamples,
       excludedRows: processed.excludedRows,
@@ -2329,6 +2333,7 @@ export async function scanSyncExecutionChunk(params: {
           query: params.context.query,
         },
       });
+    estimatedTransferBytes += Buffer.byteLength(JSON.stringify(payload), "utf8");
     const products = connectionNodes<ShopifyProductNode>(payload.products);
 
     if (products.length === 0) {
@@ -2392,6 +2397,10 @@ export async function scanSyncExecutionChunk(params: {
       : [];
 
     for (const detailPayload of detailPayloads) {
+      estimatedTransferBytes += Buffer.byteLength(
+        JSON.stringify(detailPayload),
+        "utf8",
+      );
       const detailedProducts =
         detailPayload.nodes?.filter(
           (product): product is ShopifyProductNode => Boolean(product),
@@ -2551,6 +2560,7 @@ export async function scanSyncExecutionChunk(params: {
     productsEvaluated,
     variantsConsidered,
     recordsPrepared,
+    estimatedTransferBytes,
     rows,
     includedSamples,
     excludedRows,
