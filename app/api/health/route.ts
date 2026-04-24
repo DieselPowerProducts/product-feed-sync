@@ -61,7 +61,7 @@ export async function GET() {
         connection: shopifyConnection,
         pendingHardDeletes: pendingHardDeletes.length,
         webhooks: {
-          mode: "disabled_for_cron_only_delta",
+          mode: "delete_webhook_only",
           productsDelete: productsDeleteWebhook,
         },
       },

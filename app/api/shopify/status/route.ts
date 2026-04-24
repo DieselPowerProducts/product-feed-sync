@@ -39,7 +39,7 @@ export async function GET() {
       : null,
     connection,
     webhooks: {
-      mode: "disabled_for_cron_only_delta",
+      mode: "delete_webhook_only",
       productsDelete: productsDeleteWebhook,
     },
   });
