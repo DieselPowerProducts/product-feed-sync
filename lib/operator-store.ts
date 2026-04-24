@@ -4,7 +4,9 @@ import { del, get, put } from "@vercel/blob";
 import { env } from "@/lib/env";
 import {
   deleteNeonObject,
+  deleteNeonObjects,
   isNeonConfigured,
+  listNeonObjectsByKind,
   readNeonObject,
   writeNeonObject,
 } from "@/lib/neon";
@@ -36,6 +38,10 @@ const LOCAL_PREVIEW_EXPORT_DIR = path.join(
 );
 const NEON_STATE_KEY = "state";
 const NEON_STATE_KIND = "operator-state";
+const NEON_PENDING_UPSERT_PREFIX = "pending-upsert";
+const NEON_PENDING_UPSERT_KIND = "pending-shopify-upsert";
+const NEON_PENDING_DELETE_PREFIX = "pending-delete";
+const NEON_PENDING_DELETE_KIND = "pending-shopify-delete";
 const NEON_LIVE_OFFER_INDEX_KEY = "live-offer-index";
 const NEON_LIVE_OFFER_INDEX_KIND = "live-offer-index";
 const NEON_RUN_ARTIFACT_PREFIX = "run-artifact";
@@ -316,6 +322,52 @@ function sanitizeLiveOfferIndex(
   } satisfies LiveOfferIndexRecord;
 }
 
+function sanitizePendingShopifyUpsertRecord(
+  entry: Partial<PendingShopifyUpsertRecord> | null | undefined,
+) {
+  return {
+    productId: entry?.productId ?? "",
+    title: entry?.title ?? "",
+    handle: entry?.handle ?? "",
+    reason:
+      entry?.reason === "shopify_create"
+        ? "shopify_create"
+        : "shopify_update",
+    queuedAt: entry?.queuedAt ?? new Date().toISOString(),
+    source: "shopify_webhook" as const,
+    topic:
+      entry?.topic === "products/create"
+        ? "products/create"
+        : "products/update",
+    webhookId: entry?.webhookId ?? null,
+    eventId: entry?.eventId ?? null,
+    triggeredAt: entry?.triggeredAt ?? null,
+    shopDomain: entry?.shopDomain ?? null,
+  } satisfies PendingShopifyUpsertRecord;
+}
+
+function sanitizePendingShopifyDeleteRecord(
+  entry: Partial<PendingShopifyDeleteRecord> | null | undefined,
+) {
+  return {
+    offerId: entry?.offerId ?? "",
+    contentLanguage: entry?.contentLanguage ?? "",
+    feedLabel: entry?.feedLabel ?? "",
+    reason: entry?.reason ?? "shopify_hard_delete",
+    productId: entry?.productId ?? "",
+    variantId: entry?.variantId ?? "",
+    title: entry?.title ?? "",
+    variantTitle: entry?.variantTitle ?? null,
+    handle: entry?.handle ?? "",
+    sku: entry?.sku ?? null,
+    link: entry?.link ?? null,
+    queuedAt: entry?.queuedAt ?? new Date().toISOString(),
+    source: "shopify_webhook" as const,
+    webhookId: entry?.webhookId ?? null,
+    shopDomain: entry?.shopDomain ?? null,
+  } satisfies PendingShopifyDeleteRecord;
+}
+
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   const history = Array.isArray(input?.history)
     ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
@@ -379,46 +431,12 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
     pendingUpserts: Array.isArray(input?.pendingUpserts)
       ? input.pendingUpserts
           .slice(0, PENDING_UPSERT_LIMIT)
-          .map((entry) => ({
-            productId: entry.productId,
-            title: entry.title ?? "",
-            handle: entry.handle ?? "",
-            reason:
-              entry.reason === "shopify_create"
-                ? "shopify_create"
-                : "shopify_update",
-            queuedAt: entry.queuedAt ?? new Date().toISOString(),
-            source: "shopify_webhook",
-            topic:
-              entry.topic === "products/create"
-                ? "products/create"
-                : "products/update",
-            webhookId: entry.webhookId ?? null,
-            eventId: entry.eventId ?? null,
-            triggeredAt: entry.triggeredAt ?? null,
-            shopDomain: entry.shopDomain ?? null,
-          }))
+          .map((entry) => sanitizePendingShopifyUpsertRecord(entry))
       : [],
     pendingDeletes: Array.isArray(input?.pendingDeletes)
       ? input.pendingDeletes
           .slice(0, PENDING_DELETE_LIMIT)
-          .map((entry) => ({
-            offerId: entry.offerId,
-            contentLanguage: entry.contentLanguage,
-            feedLabel: entry.feedLabel,
-            reason: entry.reason ?? "shopify_hard_delete",
-            productId: entry.productId,
-            variantId: entry.variantId,
-            title: entry.title ?? "",
-            variantTitle: entry.variantTitle ?? null,
-            handle: entry.handle ?? "",
-            sku: entry.sku ?? null,
-            link: entry.link ?? null,
-            queuedAt: entry.queuedAt ?? new Date().toISOString(),
-            source: "shopify_webhook",
-            webhookId: entry.webhookId ?? null,
-            shopDomain: entry.shopDomain ?? null,
-          }))
+          .map((entry) => sanitizePendingShopifyDeleteRecord(entry))
       : [],
     cronInvocations,
     bootstrap: {
@@ -528,6 +546,21 @@ function buildPendingUpsertKey(
   return target.productId;
 }
 
+function getNeonPendingUpsertKey(
+  target: Pick<PendingShopifyUpsertRecord, "productId">,
+) {
+  return `${NEON_PENDING_UPSERT_PREFIX}:${buildPendingUpsertKey(target)}`;
+}
+
+function getNeonPendingDeleteKey(
+  target: Pick<
+    PendingShopifyDeleteRecord,
+    "contentLanguage" | "feedLabel" | "offerId"
+  >,
+) {
+  return `${NEON_PENDING_DELETE_PREFIX}:${buildPendingDeleteKey(target)}`;
+}
+
 function getRunArtifactBlobPath(id: string) {
   return `${RUN_ARTIFACT_BLOB_PREFIX}/${id}.json`;
 }
@@ -594,6 +627,106 @@ async function readNeonStateRaw() {
   return state ? sanitizeState(state) : null;
 }
 
+async function listNeonPendingShopifyUpserts() {
+  const rows = await listNeonObjectsByKind<PendingShopifyUpsertRecord>({
+    kind: NEON_PENDING_UPSERT_KIND,
+    limit: PENDING_UPSERT_LIMIT,
+  });
+
+  return rows
+    .map((row) => sanitizePendingShopifyUpsertRecord(row.payload))
+    .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
+}
+
+async function listNeonPendingShopifyDeletes() {
+  const rows = await listNeonObjectsByKind<PendingShopifyDeleteRecord>({
+    kind: NEON_PENDING_DELETE_KIND,
+    limit: PENDING_DELETE_LIMIT,
+  });
+
+  return rows
+    .map((row) => sanitizePendingShopifyDeleteRecord(row.payload))
+    .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
+}
+
+async function trimNeonQueue(kind: string, limit: number) {
+  while (true) {
+    const overflow = await listNeonObjectsByKind<unknown>({
+      kind,
+      limit: 250,
+      offset: limit,
+    });
+
+    if (!overflow.length) {
+      return;
+    }
+
+    await deleteNeonObjects(overflow.map((row) => row.key));
+
+    if (overflow.length < 250) {
+      return;
+    }
+  }
+}
+
+async function writeNeonPendingShopifyUpserts(
+  entries: PendingShopifyUpsertRecord[],
+) {
+  for (const entry of entries) {
+    await writeNeonObject(
+      getNeonPendingUpsertKey(entry),
+      NEON_PENDING_UPSERT_KIND,
+      sanitizePendingShopifyUpsertRecord(entry),
+    );
+  }
+
+  await trimNeonQueue(NEON_PENDING_UPSERT_KIND, PENDING_UPSERT_LIMIT);
+}
+
+async function writeNeonPendingShopifyDeletes(
+  entries: PendingShopifyDeleteRecord[],
+) {
+  for (const entry of entries) {
+    await writeNeonObject(
+      getNeonPendingDeleteKey(entry),
+      NEON_PENDING_DELETE_KIND,
+      sanitizePendingShopifyDeleteRecord(entry),
+    );
+  }
+
+  await trimNeonQueue(NEON_PENDING_DELETE_KIND, PENDING_DELETE_LIMIT);
+}
+
+function stripPendingQueuesFromState(state: OperatorState) {
+  if (!state.pendingUpserts.length && !state.pendingDeletes.length) {
+    return state;
+  }
+
+  return {
+    ...state,
+    pendingUpserts: [],
+    pendingDeletes: [],
+  };
+}
+
+async function migrateNeonQueuesFromState(state: OperatorState) {
+  if (!state.pendingUpserts.length && !state.pendingDeletes.length) {
+    return state;
+  }
+
+  if (state.pendingUpserts.length) {
+    await writeNeonPendingShopifyUpserts(state.pendingUpserts);
+  }
+
+  if (state.pendingDeletes.length) {
+    await writeNeonPendingShopifyDeletes(state.pendingDeletes);
+  }
+
+  const strippedState = stripPendingQueuesFromState(state);
+  await writeNeonState(strippedState);
+  return strippedState;
+}
+
 async function readFallbackStateForNeon() {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     return readBlobState();
@@ -610,16 +743,30 @@ async function readNeonState() {
   const existing = await readNeonStateRaw();
 
   if (existing) {
-    return existing;
+    return migrateNeonQueuesFromState(existing);
   }
 
   const fallbackState = await readFallbackStateForNeon();
-  await writeNeonState(fallbackState);
-  return fallbackState;
+  const strippedFallbackState = stripPendingQueuesFromState(fallbackState);
+
+  if (fallbackState.pendingUpserts.length) {
+    await writeNeonPendingShopifyUpserts(fallbackState.pendingUpserts);
+  }
+
+  if (fallbackState.pendingDeletes.length) {
+    await writeNeonPendingShopifyDeletes(fallbackState.pendingDeletes);
+  }
+
+  await writeNeonState(strippedFallbackState);
+  return strippedFallbackState;
 }
 
 async function writeNeonState(state: OperatorState) {
-  await writeNeonObject(NEON_STATE_KEY, NEON_STATE_KIND, state);
+  await writeNeonObject(
+    NEON_STATE_KEY,
+    NEON_STATE_KIND,
+    stripPendingQueuesFromState(state),
+  );
 }
 
 async function readNeonLiveOfferIndexRaw() {
@@ -1060,6 +1207,10 @@ export async function clearActiveSyncRun(runId: string) {
 }
 
 export async function getPendingShopifyDeletes() {
+  if (getStateStorageMode() === "neon") {
+    return listNeonPendingShopifyDeletes();
+  }
+
   const state = await readState();
 
   return [...state.pendingDeletes].sort((left, right) =>
@@ -1068,6 +1219,10 @@ export async function getPendingShopifyDeletes() {
 }
 
 export async function getPendingShopifyUpserts() {
+  if (getStateStorageMode() === "neon") {
+    return listNeonPendingShopifyUpserts();
+  }
+
   const state = await readState();
 
   return [...state.pendingUpserts].sort((left, right) =>
@@ -1080,6 +1235,11 @@ export async function appendPendingShopifyUpserts(
 ) {
   if (!entries.length) {
     return [];
+  }
+
+  if (getStateStorageMode() === "neon") {
+    await writeNeonPendingShopifyUpserts(entries);
+    return listNeonPendingShopifyUpserts();
   }
 
   const state = await readState();
@@ -1109,6 +1269,40 @@ export async function removePendingShopifyUpserts(
 ) {
   if (!productIds.length) {
     return [];
+  }
+
+  if (getStateStorageMode() === "neon") {
+    const cutoff =
+      options?.queuedAtLte && !Number.isNaN(Date.parse(options.queuedAtLte))
+        ? options.queuedAtLte
+        : null;
+    const keysToDelete: string[] = [];
+    const removed: PendingShopifyUpsertRecord[] = [];
+
+    for (const productId of productIds) {
+      const entry = await readNeonObject<PendingShopifyUpsertRecord>(
+        getNeonPendingUpsertKey({ productId }),
+      );
+
+      if (!entry) {
+        continue;
+      }
+
+      const sanitized = sanitizePendingShopifyUpsertRecord(entry);
+
+      if (cutoff && sanitized.queuedAt > cutoff) {
+        continue;
+      }
+
+      removed.push(sanitized);
+      keysToDelete.push(getNeonPendingUpsertKey({ productId }));
+    }
+
+    if (keysToDelete.length) {
+      await deleteNeonObjects(keysToDelete);
+    }
+
+    return removed;
   }
 
   const state = await readState();
@@ -1148,6 +1342,11 @@ export async function appendPendingShopifyDeletes(
     return [];
   }
 
+  if (getStateStorageMode() === "neon") {
+    await writeNeonPendingShopifyDeletes(entries);
+    return listNeonPendingShopifyDeletes();
+  }
+
   const state = await readState();
   const pendingByKey = new Map(
     state.pendingDeletes.map((entry) => [buildPendingDeleteKey(entry), entry]),
@@ -1176,6 +1375,30 @@ export async function removePendingShopifyDeletes(
 ) {
   if (!targets.length) {
     return [];
+  }
+
+  if (getStateStorageMode() === "neon") {
+    const keysToDelete: string[] = [];
+    const removed: PendingShopifyDeleteRecord[] = [];
+
+    for (const target of targets) {
+      const entry = await readNeonObject<PendingShopifyDeleteRecord>(
+        getNeonPendingDeleteKey(target),
+      );
+
+      if (!entry) {
+        continue;
+      }
+
+      removed.push(sanitizePendingShopifyDeleteRecord(entry));
+      keysToDelete.push(getNeonPendingDeleteKey(target));
+    }
+
+    if (keysToDelete.length) {
+      await deleteNeonObjects(keysToDelete);
+    }
+
+    return removed;
   }
 
   const state = await readState();

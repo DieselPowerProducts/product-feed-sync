@@ -70,6 +70,35 @@ export async function readNeonObject<T>(key: string) {
   return rows[0]?.payload ?? null;
 }
 
+export async function listNeonObjectsByKind<T>(params: {
+  kind: string;
+  limit?: number;
+  offset?: number;
+}) {
+  await ensureOperatorStoreSchema();
+  const sql = getNeonSql();
+  const limit = Math.max(1, params.limit ?? 1000);
+  const offset = Math.max(0, params.offset ?? 0);
+  const rows = (await sql`
+    SELECT object_key, payload, updated_at
+    FROM dpp_operator_objects
+    WHERE object_kind = ${params.kind}
+    ORDER BY updated_at DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `) as Array<{
+    object_key: string;
+    payload: T;
+    updated_at: string;
+  }>;
+
+  return rows.map((row) => ({
+    key: row.object_key,
+    payload: row.payload,
+    updatedAt: row.updated_at,
+  }));
+}
+
 export async function writeNeonObject(
   key: string,
   kind: string,
@@ -96,5 +125,19 @@ export async function deleteNeonObject(key: string) {
   await sql`
     DELETE FROM dpp_operator_objects
     WHERE object_key = ${key}
+  `;
+}
+
+export async function deleteNeonObjects(keys: string[]) {
+  if (!keys.length) {
+    return;
+  }
+
+  await ensureOperatorStoreSchema();
+  const sql = getNeonSql();
+
+  await sql`
+    DELETE FROM dpp_operator_objects
+    WHERE object_key = ANY(${keys})
   `;
 }
