@@ -9,14 +9,12 @@ import { resolveGoogleProductCategoryId } from "@/lib/google-taxonomy";
 import {
   appendSyncHistory,
   getPendingShopifyDeletes,
-  getPendingShopifyUpserts,
+  getLatestSuccessfulLiveSyncHistory,
   removePendingShopifyDeletes,
-  removePendingShopifyUpserts,
   getSyncSettings,
   writePreviewExportArtifact,
   writeRunArtifact,
   type PendingShopifyDeleteRecord,
-  type PendingShopifyUpsertRecord,
   type SyncHistoryPurpose,
   type SyncHistoryEntry,
   type SyncSettings,
@@ -1597,19 +1595,12 @@ export function buildSyncScope(
   settings: SyncSettings,
   exhaustive: boolean,
 ) {
+  void settings;
+
   if (mode === "full") {
     return exhaustive
       ? "All Shopify products are scanned across active, draft, and archived statuses so current feed rows can be inserted and inactive rows can be deleted from Merchant Center."
       : "Shopify products are sampled across all statuses from the full catalog for previewing.";
-  }
-
-  if (searchPlan.source === "webhook_queue") {
-    const queuedCount = searchPlan.productIds?.length ?? 0;
-    return queuedCount > 0
-      ? exhaustive
-        ? `${queuedCount.toLocaleString()} Shopify products queued from create/update webhooks are scanned exhaustively so Merchant Center only receives product-level delta candidates instead of a broad updated_at sweep.`
-        : `${queuedCount.toLocaleString()} Shopify products queued from create/update webhooks are sampled for delta preview.`
-      : "No queued Shopify create/update webhooks are pending, so the delta run can skip product upserts unless webhook-driven deletes are waiting.";
   }
 
   if (searchPlan.source === "live_sync_checkpoint" && searchPlan.lookbackStart) {
@@ -1619,8 +1610,12 @@ export function buildSyncScope(
   }
 
   return exhaustive
-    ? "Shopify delta scope is using a legacy fallback query instead of the webhook queue."
-    : "Shopify delta preview is using a legacy fallback query instead of the webhook queue.";
+    ? "Shopify delta scope is using the stored live-sync checkpoint."
+    : "Shopify delta preview is using the stored live-sync checkpoint.";
+}
+
+function buildLiveSyncCheckpointQuery(lookbackStart: string) {
+  return `updated_at:>'${lookbackStart}'`;
 }
 
 async function buildSearchQuery(
@@ -1632,6 +1627,9 @@ async function buildSearchQuery(
     allowDeltaFallback?: boolean;
   },
 ): Promise<SyncSearchPlan> {
+  void settings;
+  void _options;
+
   if (mode === "full") {
     return {
       query: "",
@@ -1643,31 +1641,24 @@ async function buildSearchQuery(
     };
   }
 
-  const pendingUpserts = await getPendingShopifyUpserts();
+  const latestLiveSync = await getLatestSuccessfulLiveSyncHistory();
 
-  if (pendingUpserts.length > 0) {
-    const productIds = Array.from(
-      new Set(pendingUpserts.map((entry) => entry.productId)),
+  if (!latestLiveSync) {
+    throw new Error(
+      "Delta sync requires a successful live baseline. Run a live full sync first.",
     );
-
-    return {
-      query: "",
-      lookbackStart: null,
-      source: "webhook_queue",
-      productIds,
-      notes: [
-        `Delta scope uses ${productIds.length.toLocaleString()} Shopify products queued by create/update webhooks instead of Shopify updated_at.`,
-      ],
-    };
   }
 
+  const lookbackStart = new Date(
+    Date.parse(latestLiveSync.finishedAt) - 5 * MS_PER_MINUTE,
+  ).toISOString();
+
   return {
-    query: "",
-    lookbackStart: null,
-    source: "webhook_queue",
-    productIds: [],
+    query: buildLiveSyncCheckpointQuery(lookbackStart),
+    lookbackStart,
+    source: "live_sync_checkpoint",
     notes: [
-      "No Shopify create/update webhooks are queued right now, so the delta run can skip product upserts and only process webhook-driven deletes if any are pending.",
+      `Delta scope uses Shopify products changed after ${lookbackStart} based on the last successful live sync checkpoint, with a 5-minute overlap safety buffer.`,
     ],
   };
 }
@@ -2638,7 +2629,7 @@ async function buildDryRunPreview(params: {
   let recordsPrepared = 0;
   let pagesScanned = 0;
   let scanCompleted = false;
-  let progressTargetTotal = getProgressTargetTotal(
+  const progressTargetTotal = getProgressTargetTotal(
     params.exhaustive,
     context.totalProducts,
   );
@@ -3154,16 +3145,6 @@ export async function runSync(
         ),
       );
     }
-    if (
-      merchant?.errorCount === 0 &&
-      mode === "delta" &&
-      previewRun.searchPlan.source === "webhook_queue" &&
-      (previewRun.searchPlan.productIds?.length ?? 0) > 0
-    ) {
-      await removePendingShopifyUpserts(previewRun.searchPlan.productIds ?? [], {
-        queuedAtLte: startedAt,
-      });
-    }
     const notes = buildSyncNotes({
       dryRun,
       exhaustive,
@@ -3285,7 +3266,7 @@ export async function runSync(
     }).catch(() => ({
       query: mode === "full" ? "" : "",
       lookbackStart: null,
-      source: mode === "full" ? "full_catalog" : "webhook_queue",
+      source: mode === "full" ? "full_catalog" : "live_sync_checkpoint",
       notes: [],
     } satisfies SyncSearchPlan));
 

@@ -3,15 +3,12 @@ import { getConfigurationStatus } from "@/lib/env";
 import { getGoogleMerchantConnectionStatus } from "@/lib/google-merchant";
 import {
   getOperatorStoreStatus,
-  getPendingShopifyUpserts,
   getPendingShopifyDeletes,
   getSyncSettings,
 } from "@/lib/operator-store";
 import {
   getRuntimeShopifyConnection,
-  getShopifyProductsCreateWebhookStatus,
   getShopifyProductsDeleteWebhookStatus,
-  getShopifyProductsUpdateWebhookStatus,
   getShopifyConfigurationStatus,
 } from "@/lib/shopify";
 import { decideSyncMode } from "@/lib/sync";
@@ -24,37 +21,13 @@ export async function GET() {
   const [
     settings,
     googleMerchant,
-    pendingProductUpdates,
     pendingHardDeletes,
-    productsCreateWebhook,
-    productsUpdateWebhook,
     productsDeleteWebhook,
   ] =
     await Promise.all([
       getSyncSettings(),
       getGoogleMerchantConnectionStatus(),
-      getPendingShopifyUpserts(),
       getPendingShopifyDeletes(),
-      getShopifyProductsCreateWebhookStatus().catch((error) => ({
-        uri: getShopifyConfigurationStatus().productsUpsertWebhookUrl,
-        registered: false,
-        subscriptionId: null,
-        subscriptions: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown Shopify webhook status error.",
-      })),
-      getShopifyProductsUpdateWebhookStatus().catch((error) => ({
-        uri: getShopifyConfigurationStatus().productsUpsertWebhookUrl,
-        registered: false,
-        subscriptionId: null,
-        subscriptions: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown Shopify webhook status error.",
-      })),
       getShopifyProductsDeleteWebhookStatus().catch((error) => ({
         uri: getShopifyConfigurationStatus().productsDeleteWebhookUrl,
         registered: false,
@@ -86,11 +59,9 @@ export async function GET() {
       shopify: {
         ...getShopifyConfigurationStatus(),
         connection: shopifyConnection,
-        pendingProductUpdates: pendingProductUpdates.length,
         pendingHardDeletes: pendingHardDeletes.length,
         webhooks: {
-          productsCreate: productsCreateWebhook,
-          productsUpdate: productsUpdateWebhook,
+          mode: "disabled_for_cron_only_delta",
           productsDelete: productsDeleteWebhook,
         },
       },

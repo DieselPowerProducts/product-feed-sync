@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
 import { isOperatorAuthenticated } from "@/lib/operator-auth";
-import {
-  ensureShopifyProductsCreateWebhook,
-  ensureShopifyProductsDeleteWebhook,
-  ensureShopifyProductsUpdateWebhook,
-} from "@/lib/shopify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,31 +15,10 @@ export async function GET() {
     );
   }
 
-  try {
-    const [productsCreate, productsUpdate, productsDelete] = await Promise.all([
-      ensureShopifyProductsCreateWebhook(),
-      ensureShopifyProductsUpdateWebhook(),
-      ensureShopifyProductsDeleteWebhook(),
-    ]);
-
-    return NextResponse.json({
-      ok: true,
-      webhooks: {
-        productsCreate,
-        productsUpdate,
-        productsDelete,
-      },
-    });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown Shopify webhook registration error.",
-      },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json({
+    ok: true,
+    disabled: true,
+    message:
+      "Shopify product webhooks are disabled. Delta sync now reads Shopify changes during the scheduled cron run only.",
+  });
 }
