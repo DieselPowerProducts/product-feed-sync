@@ -13,6 +13,7 @@ import { resolveActiveLiveSyncRun } from "@/lib/live-sync-jobs";
 import { getRuntimeShopifyConnection } from "@/lib/shopify";
 import { getUpcomingSyncDates } from "@/lib/sync";
 import {
+  deleteCronInvocationAction,
   deleteHistoryEntryAction,
   logoutAction,
   saveSettingsAction,
@@ -153,6 +154,16 @@ function getSavedMessage(saved: string | undefined) {
       return {
         tone: "error" as const,
         text: "The selected run could not be deleted.",
+      };
+    case "cron-deleted":
+      return {
+        tone: "success" as const,
+        text: "The scheduled trigger monitor entry was deleted.",
+      };
+    case "cron-delete-invalid":
+      return {
+        tone: "error" as const,
+        text: "The selected scheduled trigger entry could not be deleted.",
       };
     default:
       return null;
@@ -500,6 +511,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                     <th className="px-4 py-3">Outcome</th>
                     <th className="px-4 py-3">Run</th>
                     <th className="px-4 py-3">Message</th>
+                    <th className="px-4 py-3">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -537,6 +549,17 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         {entry.runId ?? "-"}
                       </td>
                       <td className="px-4 py-4 text-muted">{entry.message}</td>
+                      <td className="px-4 py-4">
+                        <form action={deleteCronInvocationAction}>
+                          <input type="hidden" name="entryId" value={entry.id} />
+                          <button
+                            type="submit"
+                            className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

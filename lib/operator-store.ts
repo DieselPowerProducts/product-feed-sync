@@ -1474,6 +1474,24 @@ export async function updateCronInvocationByRunId(
   return cronInvocations[index];
 }
 
+export async function deleteCronInvocationEntry(entryId: string) {
+  const state = await readState();
+  const cronInvocations = state.cronInvocations.filter(
+    (entry) => entry.id !== entryId,
+  );
+
+  if (cronInvocations.length === state.cronInvocations.length) {
+    return false;
+  }
+
+  await writeState({
+    ...state,
+    cronInvocations,
+  });
+
+  return true;
+}
+
 export async function getLatestSuccessfulLiveSyncHistory() {
   const state = await readState();
 

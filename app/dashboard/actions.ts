@@ -6,6 +6,7 @@ import {
   signOutOperator,
 } from "@/lib/operator-auth";
 import {
+  deleteCronInvocationEntry,
   deleteSyncHistoryEntry,
   getBootstrapState,
   getSyncSettings,
@@ -77,4 +78,23 @@ export async function deleteHistoryEntryAction(formData: FormData) {
 
   await deleteSyncHistoryEntry(entryId);
   redirect("/dashboard?saved=history-deleted");
+}
+
+export async function deleteCronInvocationAction(formData: FormData) {
+  if (!(await isOperatorAuthenticated())) {
+    redirect("/login");
+  }
+
+  const entryId = String(formData.get("entryId") ?? "").trim();
+
+  if (!entryId) {
+    redirect("/dashboard?saved=cron-delete-invalid");
+  }
+
+  const deleted = await deleteCronInvocationEntry(entryId);
+  redirect(
+    deleted
+      ? "/dashboard?saved=cron-deleted"
+      : "/dashboard?saved=cron-delete-invalid",
+  );
 }
