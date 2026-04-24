@@ -6,6 +6,7 @@ import type {
 } from "@/lib/google-merchant";
 import type {
   ActiveSyncRunState,
+  LiveSyncRestartCheckpointState,
   PendingShopifyDeleteRecord,
   SyncHistoryPurpose,
   SyncSettings,
@@ -44,7 +45,9 @@ export interface LiveMerchantSyncWorkflowInput {
   settings: SyncSettings;
   chunkTargetProducts?: number;
   startedAt?: string;
+  windowFrozenAt?: string;
   allowDeltaFallback?: boolean;
+  restartCheckpointId?: string | null;
 }
 
 export interface LiveMerchantSyncWorkflowProgress {
@@ -92,6 +95,55 @@ type MerchantIdentity = {
   dataSourceName: string;
   authMode: NonNullable<MerchantCatalogSyncSummary["authMode"]>;
 };
+
+type RestartCheckpointStage =
+  | "scanning"
+  | "reconciling"
+  | "deletes"
+  | "pending_deletes";
+
+export interface LiveSyncRestartCheckpointPayload {
+  version: 1;
+  input: {
+    mode: "delta" | "full";
+    trigger: "cron" | "manual";
+    purpose: SyncHistoryPurpose;
+    settings: SyncSettings;
+    chunkTargetProducts: number;
+    windowFrozenAt: string;
+    allowDeltaFallback?: boolean;
+  };
+  exportArtifactId: string;
+  cursor: string | null;
+  scanCompleted: boolean;
+  pagesScanned: number;
+  productsFetched: number;
+  variantsConsidered: number;
+  recordsPrepared: number;
+  exclusions: Record<string, number>;
+  includedSample: FeedPreviewRecord[];
+  validationSample: ExcludedPreviewSample[];
+  excludedSample: ExcludedPreviewSample[];
+  deleteSample: DeletePreviewSample[];
+  seenKeys: string[];
+  seenFingerprints: Record<string, string>;
+  unchangedRecordsSkipped: number;
+  chunksCompleted: number;
+  lastChunkDurationMs: number | null;
+  averageChunkDurationMs: number | null;
+  merchant: MerchantCatalogSyncSummary;
+  budgetUsage: SyncBudgetUsage;
+  reconciliation: {
+    stage: RestartCheckpointStage;
+    pageToken: string | null;
+    merchantPagesScanned: number;
+    merchantRowsScanned: number;
+    merchantMatchedRows: number;
+    merchantDeleteTargets: number;
+    deleteTargets: MerchantDeleteTarget[];
+    deleteIndex: number;
+  };
+}
 
 function estimateJsonBytes(value: unknown) {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -230,6 +282,21 @@ function buildDeletePreviewLookup(params: {
   });
 
   return lookup;
+}
+
+function buildDeletePreviewKeyRegistry(samples: DeletePreviewSample[]) {
+  return samples.reduce<Record<string, true>>((result, sample) => {
+    if (!sample.offerId) {
+      return result;
+    }
+
+    result[buildDeleteTargetKey({
+      contentLanguage: "en",
+      feedLabel: "US",
+      offerId: sample.offerId,
+    })] = true;
+    return result;
+  }, {});
 }
 
 function filterLiveDeleteTargets(params: {
@@ -489,8 +556,8 @@ async function waitForResumeIfPaused(params: {
   while (true) {
     const controlState = await getRunControlStateStep(params.runId);
 
-    if (controlState === "running") {
-      return;
+    if (controlState === "running" || controlState === "stop_requested") {
+      return controlState;
     }
 
     const pausedProgress = {
@@ -526,7 +593,11 @@ async function loadExecutionContextStep(
     mode: input.mode,
     settings: input.settings,
     dryRun: false,
-    effectiveNow: input.startedAt ? new Date(input.startedAt) : undefined,
+    effectiveNow: input.windowFrozenAt
+      ? new Date(input.windowFrozenAt)
+      : input.startedAt
+        ? new Date(input.startedAt)
+        : undefined,
     allowDeltaFallback: input.allowDeltaFallback,
   });
 }
@@ -580,6 +651,62 @@ async function requestBudgetPauseStep(runId: string, message: string) {
     controlState: "pause_requested",
     message,
   });
+}
+
+async function loadRestartCheckpointStep(checkpointId: string) {
+  "use step";
+  const {
+    getLiveSyncRestartCheckpoint,
+    readLiveSyncRestartCheckpointPayload,
+  } = await import("@/lib/operator-store");
+  const checkpoint = await getLiveSyncRestartCheckpoint();
+
+  if (!checkpoint || checkpoint.id !== checkpointId) {
+    throw new Error(
+      "The requested live sync checkpoint is no longer available. Refresh the dashboard before restarting.",
+    );
+  }
+
+  const payload =
+    await readLiveSyncRestartCheckpointPayload<LiveSyncRestartCheckpointPayload>();
+
+  if (!payload) {
+    throw new Error(
+      "The live sync checkpoint payload could not be loaded. Refresh the dashboard before restarting.",
+    );
+  }
+
+  return {
+    checkpoint,
+    payload,
+  };
+}
+
+async function saveRestartCheckpointStep(params: {
+  runId: string;
+  checkpoint: LiveSyncRestartCheckpointState;
+  payload: LiveSyncRestartCheckpointPayload;
+}) {
+  "use step";
+  const {
+    saveLiveSyncRestartCheckpoint,
+    updateCronInvocationByRunId,
+  } = await import("@/lib/operator-store");
+  await saveLiveSyncRestartCheckpoint(params);
+
+  if (params.checkpoint.trigger === "cron") {
+    await updateCronInvocationByRunId(params.runId, {
+      outcome: "cancelled",
+      message:
+        "Scheduled live sync stopped at a safe checkpoint and is ready to restart from the dashboard.",
+    });
+  }
+}
+
+async function clearRestartCheckpointStep(checkpointId: string) {
+  "use step";
+  const { clearLiveSyncRestartCheckpoint } = await import("@/lib/operator-store");
+  await clearLiveSyncRestartCheckpoint(checkpointId);
 }
 
 async function loadOrSeedLiveOfferIndexStep(dataSourceName: string) {
@@ -889,6 +1016,11 @@ async function persistSuccessfulRunStep(params: {
   notes.push(
     "Feed, validation, and excluded downloads were saved with this live run so the same output can be inspected later from run history.",
   );
+  if (params.input.restartCheckpointId) {
+    notes.unshift(
+      "This live sync restarted from a saved checkpoint after an earlier run was stopped at a safe checkpoint.",
+    );
+  }
   if (params.pendingDeleteCount > 0) {
     notes.unshift(
       `${params.pendingDeleteCount} hard-deleted Shopify variant(s) were queued from webhook events and included in this run's Merchant delete scope.`,
@@ -1088,6 +1220,11 @@ async function persistFailedRunStep(params: {
     finishedAt: new Date().toISOString(),
     configuration: getConfigurationStatus(),
     notes: [
+      ...(params.input.restartCheckpointId
+        ? [
+            "This live sync had been restarted from a saved checkpoint before it failed again.",
+          ]
+        : []),
       ...(params.context?.searchNotes ?? []),
       `Chunked live sync failed: ${params.message}`,
       "Merchant Center writes may be partial if the failure happened after some requests were sent.",
@@ -1167,17 +1304,20 @@ export async function liveMerchantSyncWorkflow(
   const metadata = getWorkflowMetadata();
   const runId = metadata.workflowRunId;
   const startedAt = input.startedAt ?? metadata.workflowStartedAt.toISOString();
+  const windowFrozenAt = input.windowFrozenAt ?? startedAt;
   const chunkTargetProducts = Math.max(
     1,
     input.chunkTargetProducts ?? LIVE_SYNC_CHUNK_PRODUCT_TARGET,
   );
-  const exportArtifactId = `live-sync-${input.mode}-${startedAt.replaceAll(":", "-")}`;
+  let exportArtifactId = `live-sync-${input.mode}-${startedAt.replaceAll(":", "-")}`;
   let context: SyncExecutionContext | null = null;
+  let restartCheckpointPayload: LiveSyncRestartCheckpointPayload | null = null;
   const budgetUsage = createBudgetUsage({
     ...input,
     startedAt,
     chunkTargetProducts,
   });
+  let elapsedBaseMs = 0;
 
   console.log(
     `[liveMerchantSyncWorkflow] start runId=${runId} mode=${input.mode} trigger=${input.trigger}`,
@@ -1221,12 +1361,6 @@ export async function liveMerchantSyncWorkflow(
       );
     }
     const merchant = createMerchantSummary(merchantIdentity);
-    await initializeExportArtifactStep({
-      exportArtifactId,
-      input,
-      startedAt,
-      context,
-    });
     const exclusions: Record<string, number> = {};
     const includedSample: FeedPreviewRecord[] = [];
     const validationSample: ExcludedPreviewSample[] = [];
@@ -1245,12 +1379,65 @@ export async function liveMerchantSyncWorkflow(
     let chunksCompleted = 0;
     let lastChunkDurationMs: number | null = null;
     let averageChunkDurationMs: number | null = null;
+
+    if (input.restartCheckpointId) {
+      const loadedCheckpoint = await loadRestartCheckpointStep(
+        input.restartCheckpointId,
+      );
+      restartCheckpointPayload = loadedCheckpoint.payload;
+      await clearRestartCheckpointStep(input.restartCheckpointId);
+      exportArtifactId = restartCheckpointPayload.exportArtifactId;
+      cursor = restartCheckpointPayload.cursor;
+      scanCompleted = restartCheckpointPayload.scanCompleted;
+      pagesScanned = restartCheckpointPayload.pagesScanned;
+      productsFetched = restartCheckpointPayload.productsFetched;
+      variantsConsidered = restartCheckpointPayload.variantsConsidered;
+      recordsPrepared = restartCheckpointPayload.recordsPrepared;
+      unchangedRecordsSkipped = restartCheckpointPayload.unchangedRecordsSkipped;
+      chunksCompleted = restartCheckpointPayload.chunksCompleted;
+      lastChunkDurationMs = restartCheckpointPayload.lastChunkDurationMs;
+      averageChunkDurationMs = restartCheckpointPayload.averageChunkDurationMs;
+      elapsedBaseMs = Math.max(
+        0,
+        restartCheckpointPayload.budgetUsage.elapsedMs,
+      );
+      Object.assign(exclusions, restartCheckpointPayload.exclusions);
+      includedSample.push(...restartCheckpointPayload.includedSample);
+      validationSample.push(...restartCheckpointPayload.validationSample);
+      excludedSample.push(...restartCheckpointPayload.excludedSample);
+      deleteSample.push(...restartCheckpointPayload.deleteSample);
+      Object.assign(
+        deletePreviewKeys,
+        buildDeletePreviewKeyRegistry(restartCheckpointPayload.deleteSample),
+      );
+      seenKeys.push(...restartCheckpointPayload.seenKeys);
+      Object.assign(seenFingerprints, restartCheckpointPayload.seenFingerprints);
+      Object.assign(merchant, restartCheckpointPayload.merchant);
+      Object.assign(budgetUsage, restartCheckpointPayload.budgetUsage, {
+        mode: input.mode,
+        chunkTargetProducts,
+      });
+      budgetUsage.productsScanned = productsFetched;
+      budgetUsage.chunksCompleted = chunksCompleted;
+    } else {
+      await initializeExportArtifactStep({
+        exportArtifactId,
+        input: {
+          ...input,
+          windowFrozenAt,
+        },
+        startedAt,
+        context,
+      });
+    }
+
     budgetUsage.totalProducts = context.totalProducts;
     budgetUsage.vercelFunctionsUsed += input.mode === "delta" ? 5 : 4;
     budgetUsage.neonOpsUsed += input.mode === "delta" ? 5 : 4;
 
     const buildBudgetSnapshot = () => {
-      budgetUsage.elapsedMs = Math.max(0, Date.now() - Date.parse(startedAt));
+      budgetUsage.elapsedMs =
+        elapsedBaseMs + Math.max(0, Date.now() - Date.parse(startedAt));
       budgetUsage.totalProducts = context?.totalProducts ?? budgetUsage.totalProducts;
       return evaluateSyncBudget({
         profile: budgetProfile,
@@ -1277,6 +1464,202 @@ export async function liveMerchantSyncWorkflow(
     const notePreviewExportChunkWrite = () => {
       budgetUsage.vercelFunctionsUsed += 1;
       budgetUsage.neonOpsUsed += 2;
+    };
+
+    const buildStoppedResult = (message: string): SyncRunResult => {
+      const finishedAt = new Date().toISOString();
+
+      return {
+        ok: true,
+        trigger: input.trigger,
+        purpose: input.purpose ?? "sync",
+        mode: input.mode,
+        dryRun: false,
+        exhaustive: true,
+        scope:
+          input.mode === "full"
+            ? "All Shopify products are scanned across active, draft, and archived statuses so current feed rows can be inserted and inactive rows can be deleted from Merchant Center."
+            : "Shopify products changed after the last successful live sync are scanned exhaustively so Merchant Center can be updated incrementally.",
+        startedAt,
+        finishedAt,
+        configuration: getConfigurationStatus(),
+        notes: [message],
+        query: context!.query,
+        lookbackStart: context!.lookbackStart,
+        lookbackEnd: context!.lookbackEnd ?? null,
+        storefrontBaseUrl: context!.storefrontBaseUrl,
+        stats: {
+          pageSize: 250,
+          pagesScanned,
+          scanCompleted,
+          totalProducts: context!.totalProducts,
+          productsFetched,
+          variantsConsidered,
+          recordsPrepared,
+          excluded: Object.values(exclusions).reduce((sum, count) => sum + count, 0),
+          validationIssues: 0,
+          previewLimit: DEFAULT_PREVIEW_LIMIT,
+          merchantUpsertsAttempted: merchant.upsertsAttempted,
+          merchantUpsertsSucceeded: merchant.upsertsSucceeded,
+          merchantDeletesAttempted: merchant.deletesAttempted,
+          merchantDeletesSucceeded: merchant.deletesSucceeded,
+          merchantReconciliationDeletes: merchant.reconciliationDeletes,
+          merchantWriteErrors: merchant.errorCount,
+        },
+        exclusions,
+        preview: includedSample.slice(0, DEFAULT_PREVIEW_LIMIT),
+        exportArtifactId,
+        deleteSample,
+        merchant,
+      };
+    };
+
+    const buildRestartCheckpointPayload = (params: {
+      stage: RestartCheckpointStage;
+      reconciliationPageToken?: string | null;
+      merchantPagesScanned?: number;
+      merchantRowsScanned?: number;
+      merchantMatchedRows?: number;
+      merchantDeleteTargets?: number;
+      reconciliationTargets?: MerchantDeleteTarget[];
+      reconciliationDeleteIndex?: number;
+    }) =>
+      ({
+        version: 1,
+        input: {
+          mode: input.mode,
+          trigger: input.trigger,
+          purpose: input.purpose ?? "sync",
+          settings: input.settings,
+          chunkTargetProducts,
+          windowFrozenAt,
+          allowDeltaFallback: input.allowDeltaFallback,
+        },
+        exportArtifactId,
+        cursor,
+        scanCompleted,
+        pagesScanned,
+        productsFetched,
+        variantsConsidered,
+        recordsPrepared,
+        exclusions: { ...exclusions },
+        includedSample: [...includedSample],
+        validationSample: [...validationSample],
+        excludedSample: [...excludedSample],
+        deleteSample: [...deleteSample],
+        seenKeys: [...seenKeys],
+        seenFingerprints: { ...seenFingerprints },
+        unchangedRecordsSkipped,
+        chunksCompleted,
+        lastChunkDurationMs,
+        averageChunkDurationMs,
+        merchant: {
+          ...merchant,
+          errors: [...merchant.errors],
+          deleteTargetsSample: [...merchant.deleteTargetsSample],
+          deleteTargetKeysSucceeded: [...merchant.deleteTargetKeysSucceeded],
+        },
+        budgetUsage: {
+          ...budgetUsage,
+          elapsedMs:
+            elapsedBaseMs + Math.max(0, Date.now() - Date.parse(startedAt)),
+        },
+        reconciliation: {
+          stage: params.stage,
+          pageToken: params.reconciliationPageToken ?? null,
+          merchantPagesScanned: params.merchantPagesScanned ?? 0,
+          merchantRowsScanned: params.merchantRowsScanned ?? 0,
+          merchantMatchedRows: params.merchantMatchedRows ?? 0,
+          merchantDeleteTargets: params.merchantDeleteTargets ?? 0,
+          deleteTargets: [...(params.reconciliationTargets ?? [])],
+          deleteIndex: params.reconciliationDeleteIndex ?? 0,
+        },
+      }) satisfies LiveSyncRestartCheckpointPayload;
+
+    const maybeStopForCheckpoint = async (params: {
+      progress: LiveMerchantSyncWorkflowProgress;
+      stage: RestartCheckpointStage;
+      reconciliationPageToken?: string | null;
+      merchantPagesScanned?: number;
+      merchantRowsScanned?: number;
+      merchantMatchedRows?: number;
+      merchantDeleteTargets?: number;
+      reconciliationTargets?: MerchantDeleteTarget[];
+      reconciliationDeleteIndex?: number;
+    }) => {
+      const controlState = await getRunControlStateStep(runId);
+
+      if (controlState !== "stop_requested") {
+        return null;
+      }
+
+      const checkpointId = `${input.mode}-${new Date().toISOString().replaceAll(":", "-")}`;
+      const checkpointMessage =
+        "Sync stopped at a safe checkpoint. Refresh the dashboard and restart from checkpoint after you deploy the fix.";
+      const checkpoint = {
+        id: checkpointId,
+        artifactId: `checkpoint-${checkpointId}`,
+        createdAt: new Date().toISOString(),
+        sourceRunId: runId,
+        mode: input.mode,
+        trigger: input.trigger,
+        purpose: input.purpose ?? "sync",
+        message: checkpointMessage,
+        stage: params.stage,
+        windowFrozenAt,
+        totalProducts: context!.totalProducts,
+        productsScanned: productsFetched,
+        pagesScanned,
+        chunksCompleted,
+        merchantPhase: params.progress.merchantPhase ?? null,
+        merchantPagesScanned: params.merchantPagesScanned ?? 0,
+        merchantRowsScanned: params.merchantRowsScanned ?? 0,
+        merchantMatchedRows: params.merchantMatchedRows ?? 0,
+        merchantDeleteTargets: params.merchantDeleteTargets ?? 0,
+      } satisfies LiveSyncRestartCheckpointState;
+
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 2;
+      await saveRestartCheckpointStep({
+        runId,
+        checkpoint,
+        payload: buildRestartCheckpointPayload(params),
+      });
+
+      const stopProgress = {
+        ...params.progress,
+        controlState: "stop_requested" as const,
+        message: checkpointMessage,
+      } satisfies LiveMerchantSyncWorkflowProgress;
+
+      noteProgressPublish();
+      await publishWorkflowEvent(
+        runId,
+        {
+          type: "progress",
+          progress: stopProgress,
+        },
+        stopProgress,
+        "completed",
+        startedAt,
+      );
+      await publishWorkflowEvent(
+        runId,
+        {
+          type: "result",
+          result: {
+            ok: true,
+            finishedAt: new Date().toISOString(),
+            message: checkpointMessage,
+          },
+        },
+        undefined,
+        "completed",
+      );
+      budgetUsage.vercelFunctionsUsed += 1;
+      budgetUsage.neonOpsUsed += 1;
+      await cleanupActiveRunStep(runId);
+      return buildStoppedResult(checkpointMessage);
     };
 
     const maybePauseForBudget = async (
@@ -1377,11 +1760,21 @@ export async function liveMerchantSyncWorkflow(
         averageChunkDurationMs,
       });
       await maybePauseForBudget(scanningProgress);
-      await waitForResumeIfPaused({
+      const scanControlState = await waitForResumeIfPaused({
         runId,
         startedAt,
         progress: scanningProgress,
       });
+      if (scanControlState === "stop_requested") {
+        const stopped = await maybeStopForCheckpoint({
+          progress: scanningProgress,
+          stage: "scanning",
+        });
+
+        if (stopped) {
+          return stopped;
+        }
+      }
       noteProgressPublish();
       await publishWorkflowEvent(
         runId,
@@ -1582,12 +1975,28 @@ export async function liveMerchantSyncWorkflow(
 
     if (input.mode === "full") {
       const seenKeySet = new Set(seenKeys);
-      const reconciliationTargets: MerchantDeleteTarget[] = [];
-      let reconciliationPageToken: string | null = null;
-      let merchantPagesScanned = 0;
-      let merchantRowsScanned = 0;
-      let merchantMatchedRows = 0;
-      let merchantDeleteTargets = 0;
+      const checkpointReconciliation = restartCheckpointPayload?.reconciliation ?? null;
+      const reconciliationTargets: MerchantDeleteTarget[] =
+        checkpointReconciliation &&
+        checkpointReconciliation.stage !== "scanning"
+          ? [...checkpointReconciliation.deleteTargets]
+          : [];
+      let reconciliationPageToken: string | null =
+        checkpointReconciliation?.stage === "reconciling"
+          ? checkpointReconciliation.pageToken
+          : null;
+      let merchantPagesScanned = checkpointReconciliation?.merchantPagesScanned ?? 0;
+      let merchantRowsScanned = checkpointReconciliation?.merchantRowsScanned ?? 0;
+      let merchantMatchedRows =
+        checkpointReconciliation?.merchantMatchedRows ?? 0;
+      let merchantDeleteTargets =
+        checkpointReconciliation?.merchantDeleteTargets ?? 0;
+      const reconciliationDeleteStartIndex =
+        checkpointReconciliation?.stage === "deletes"
+          ? checkpointReconciliation.deleteIndex
+          : checkpointReconciliation?.stage === "pending_deletes"
+            ? reconciliationTargets.length
+            : 0;
 
       let reconcilingProgress = makeProgressSnapshot({
         input,
@@ -1623,64 +2032,87 @@ export async function liveMerchantSyncWorkflow(
         startedAt,
       );
 
-      while (true) {
-        await maybePauseForBudget(reconcilingProgress);
-        await waitForResumeIfPaused({
-          runId,
-          startedAt,
-          progress: reconcilingProgress,
-        });
-        budgetUsage.vercelFunctionsUsed += 1;
-        const page = await scanReconciliationPageStep(reconciliationPageToken);
-        budgetUsage.estimatedTransferBytes += page.transferBytes;
-        reconciliationPageToken = page.nextPageToken;
-        merchantPagesScanned += 1;
-        merchantRowsScanned += page.rowsScanned;
-        merchantMatchedRows += page.matches.length;
-
-        const pageTargets = page.matches.filter(
-          (target) => !seenKeySet.has(buildDeleteTargetKey(target)),
-        );
-        merchantDeleteTargets += pageTargets.length;
-        reconciliationTargets.push(...pageTargets);
-
-        reconcilingProgress = makeProgressSnapshot({
-          input,
-          startedAt,
-          chunkTargetProducts,
-          chunksCompleted,
-          totalProducts: context.totalProducts,
-          productsScanned: productsFetched,
-          pagesScanned,
-          stage: "uploading",
-          message: reconciliationPageToken
-            ? "Reconciling Merchant Center rows against the completed Shopify full scan."
-            : "Merchant reconciliation scan is complete. Preparing final delete batches.",
-          merchantPhase: "reconciling",
-          merchantCompleted: merchantMatchedRows,
-          merchantTotal: null,
-          merchantErrors: merchant.errorCount,
-          merchantPagesScanned,
-          merchantRowsScanned,
-          merchantMatchedRows,
-          merchantDeleteTargets,
-          lastChunkDurationMs,
-          averageChunkDurationMs,
-        });
-        noteProgressPublish();
-        await publishWorkflowEvent(
-          runId,
-          {
-            type: "progress",
+      if (
+        checkpointReconciliation?.stage !== "deletes" &&
+        checkpointReconciliation?.stage !== "pending_deletes"
+      ) {
+        while (true) {
+          await maybePauseForBudget(reconcilingProgress);
+          const reconciliationControlState = await waitForResumeIfPaused({
+            runId,
+            startedAt,
             progress: reconcilingProgress,
-          },
-          reconcilingProgress,
-          undefined,
-          startedAt,
-        );
+          });
+          if (reconciliationControlState === "stop_requested") {
+            const stopped = await maybeStopForCheckpoint({
+              progress: reconcilingProgress,
+              stage: "reconciling",
+              reconciliationPageToken,
+              merchantPagesScanned,
+              merchantRowsScanned,
+              merchantMatchedRows,
+              merchantDeleteTargets,
+              reconciliationTargets,
+              reconciliationDeleteIndex: 0,
+            });
 
-        if (!reconciliationPageToken) {
-          break;
+            if (stopped) {
+              return stopped;
+            }
+          }
+
+          budgetUsage.vercelFunctionsUsed += 1;
+          const page = await scanReconciliationPageStep(reconciliationPageToken);
+          budgetUsage.estimatedTransferBytes += page.transferBytes;
+          reconciliationPageToken = page.nextPageToken;
+          merchantPagesScanned += 1;
+          merchantRowsScanned += page.rowsScanned;
+          merchantMatchedRows += page.matches.length;
+
+          const pageTargets = page.matches.filter(
+            (target) => !seenKeySet.has(buildDeleteTargetKey(target)),
+          );
+          merchantDeleteTargets += pageTargets.length;
+          reconciliationTargets.push(...pageTargets);
+
+          reconcilingProgress = makeProgressSnapshot({
+            input,
+            startedAt,
+            chunkTargetProducts,
+            chunksCompleted,
+            totalProducts: context.totalProducts,
+            productsScanned: productsFetched,
+            pagesScanned,
+            stage: "uploading",
+            message: reconciliationPageToken
+              ? "Reconciling Merchant Center rows against the completed Shopify full scan."
+              : "Merchant reconciliation scan is complete. Preparing final delete batches.",
+            merchantPhase: "reconciling",
+            merchantCompleted: merchantMatchedRows,
+            merchantTotal: null,
+            merchantErrors: merchant.errorCount,
+            merchantPagesScanned,
+            merchantRowsScanned,
+            merchantMatchedRows,
+            merchantDeleteTargets,
+            lastChunkDurationMs,
+            averageChunkDurationMs,
+          });
+          noteProgressPublish();
+          await publishWorkflowEvent(
+            runId,
+            {
+              type: "progress",
+              progress: reconcilingProgress,
+            },
+            reconcilingProgress,
+            undefined,
+            startedAt,
+          );
+
+          if (!reconciliationPageToken) {
+            break;
+          }
         }
       }
 
@@ -1688,7 +2120,7 @@ export async function liveMerchantSyncWorkflow(
       merchant.reconciliationDeletes = reconciliationTargets.length;
 
       for (
-        let index = 0;
+        let index = reconciliationDeleteStartIndex;
         index < reconciliationTargets.length;
         index += chunkTargetProducts
       ) {
@@ -1719,11 +2151,27 @@ export async function liveMerchantSyncWorkflow(
             averageChunkDurationMs,
           });
           await maybePauseForBudget(progressBase);
-          await waitForResumeIfPaused({
+          const deleteControlState = await waitForResumeIfPaused({
             runId,
             startedAt,
             progress: progressBase,
           });
+          if (deleteControlState === "stop_requested") {
+            const stopped = await maybeStopForCheckpoint({
+              progress: progressBase,
+              stage: "deletes",
+              merchantPagesScanned,
+              merchantRowsScanned,
+              merchantMatchedRows,
+              merchantDeleteTargets,
+              reconciliationTargets,
+              reconciliationDeleteIndex: index,
+            });
+
+            if (stopped) {
+              return stopped;
+            }
+          }
           budgetUsage.vercelFunctionsUsed += 1;
           const deleteBatch = await deleteChunkStep({
             runId,
@@ -1781,11 +2229,22 @@ export async function liveMerchantSyncWorkflow(
         averageChunkDurationMs,
       });
       await maybePauseForBudget(progressBase);
-      await waitForResumeIfPaused({
+      const pendingDeleteControlState = await waitForResumeIfPaused({
         runId,
         startedAt,
         progress: progressBase,
       });
+      if (pendingDeleteControlState === "stop_requested") {
+        const stopped = await maybeStopForCheckpoint({
+          progress: progressBase,
+          stage: "pending_deletes",
+          merchantDeleteTargets: pendingDeleteScope.targets.length,
+        });
+
+        if (stopped) {
+          return stopped;
+        }
+      }
       budgetUsage.vercelFunctionsUsed += 1;
       const deleteBatch = await deleteChunkStep({
         runId,
@@ -1884,7 +2343,6 @@ export async function liveMerchantSyncWorkflow(
         startedAt,
       );
     }
-
     const completionProgress = makeProgressSnapshot({
       input,
       startedAt,

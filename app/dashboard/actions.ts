@@ -6,12 +6,14 @@ import {
   signOutOperator,
 } from "@/lib/operator-auth";
 import {
+  clearLiveSyncRestartCheckpoint,
   deleteCronInvocationEntry,
   deleteSyncHistoryEntry,
   getBootstrapState,
   getSyncSettings,
   saveSyncSettings,
 } from "@/lib/operator-store";
+import { restartLiveSyncFromCheckpointJob } from "@/lib/live-sync-jobs";
 import { runSync } from "@/lib/sync";
 
 function readPositiveInteger(value: FormDataEntryValue | null, fallback: number) {
@@ -96,5 +98,32 @@ export async function deleteCronInvocationAction(formData: FormData) {
     deleted
       ? "/dashboard?saved=cron-deleted"
       : "/dashboard?saved=cron-delete-invalid",
+  );
+}
+
+export async function restartCheckpointAction() {
+  if (!(await isOperatorAuthenticated())) {
+    redirect("/login");
+  }
+
+  const result = await restartLiveSyncFromCheckpointJob();
+
+  if (!result.ok) {
+    redirect("/dashboard?saved=checkpoint-restart-invalid");
+  }
+
+  redirect("/dashboard?saved=checkpoint-restart-started");
+}
+
+export async function discardCheckpointAction() {
+  if (!(await isOperatorAuthenticated())) {
+    redirect("/login");
+  }
+
+  const cleared = await clearLiveSyncRestartCheckpoint();
+  redirect(
+    cleared
+      ? "/dashboard?saved=checkpoint-cleared"
+      : "/dashboard?saved=checkpoint-restart-invalid",
   );
 }

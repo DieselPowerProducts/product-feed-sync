@@ -144,6 +144,10 @@ function progressSummary(progress: LiveSyncProgress | null) {
     return "Pause requested. The workflow will stop at the next safe checkpoint.";
   }
 
+  if (progress.controlState === "stop_requested") {
+    return "Stop requested. The workflow will save a restart checkpoint at the next safe checkpoint.";
+  }
+
   if (progress.controlState === "paused") {
     return "Sync is paused. Resume it to continue from the next checkpoint.";
   }
@@ -305,7 +309,7 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
     };
   }, [props.initialRun.runId]);
 
-  async function sendControl(action: "pause" | "resume") {
+  async function sendControl(action: "pause" | "resume" | "stop") {
     setIsControlPending(true);
     setError(null);
 
@@ -389,8 +393,10 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
 
         <div className="flex flex-wrap gap-2">
           <span className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-            {controlState === "pause_requested"
+          {controlState === "pause_requested"
               ? "Pause requested"
+              : controlState === "stop_requested"
+                ? "Stopping"
               : controlState === "paused"
                 ? "Paused"
                 : "Running"}
@@ -399,24 +405,36 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
             <span className="inline-flex rounded-full border border-line bg-white/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted">
               Pause unavailable
             </span>
-          ) : controlState === "running" ? (
-            <button
-              type="button"
-              onClick={() => sendControl("pause")}
-              disabled={isControlPending}
-              className="inline-flex rounded-full bg-[#1f1711] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#f9f2e7] disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              Pause run
-            </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => sendControl("resume")}
-              disabled={isControlPending}
-              className="inline-flex rounded-full bg-accent px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              Resume run
-            </button>
+            <>
+              {controlState === "running" ? (
+                <button
+                  type="button"
+                  onClick={() => sendControl("pause")}
+                  disabled={isControlPending}
+                  className="inline-flex rounded-full bg-[#1f1711] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#f9f2e7] disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  Pause run
+                </button>
+              ) : controlState === "paused" ? (
+                <button
+                  type="button"
+                  onClick={() => sendControl("resume")}
+                  disabled={isControlPending}
+                  className="inline-flex rounded-full bg-accent px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  Resume run
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => sendControl("stop")}
+                disabled={isControlPending || controlState === "stop_requested"}
+                className="inline-flex rounded-full border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#7d3d10] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                Stop and save checkpoint
+              </button>
+            </>
           )}
         </div>
       </div>

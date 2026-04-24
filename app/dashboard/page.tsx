@@ -3,6 +3,7 @@ import { ActiveSyncRunPanel } from "@/app/dashboard/active-sync-run-panel";
 import { FirstFullSyncButton } from "@/app/dashboard/first-full-sync-button";
 import { requireOperatorAuthentication } from "@/lib/operator-auth";
 import {
+  getLiveSyncRestartCheckpoint,
   getCronInvocations,
   getOperatorStoreStatus,
   getBootstrapState,
@@ -13,9 +14,11 @@ import { resolveActiveLiveSyncRun } from "@/lib/live-sync-jobs";
 import { getRuntimeShopifyConnection } from "@/lib/shopify";
 import { getUpcomingSyncDates } from "@/lib/sync";
 import {
+  discardCheckpointAction,
   deleteCronInvocationAction,
   deleteHistoryEntryAction,
   logoutAction,
+  restartCheckpointAction,
   saveSettingsAction,
 } from "@/app/dashboard/actions";
 
@@ -36,6 +39,7 @@ type DashboardData = {
   bootstrap: Awaited<ReturnType<typeof getBootstrapState>>;
   activeRun: Awaited<ReturnType<typeof resolveActiveLiveSyncRun>>;
   cronInvocations: Awaited<ReturnType<typeof getCronInvocations>>;
+  restartCheckpoint: Awaited<ReturnType<typeof getLiveSyncRestartCheckpoint>>;
   degraded: boolean;
 };
 
@@ -165,6 +169,21 @@ function getSavedMessage(saved: string | undefined) {
         tone: "error" as const,
         text: "The selected scheduled trigger entry could not be deleted.",
       };
+    case "checkpoint-restart-started":
+      return {
+        tone: "success" as const,
+        text: "The saved checkpoint was queued as a new live sync run.",
+      };
+    case "checkpoint-cleared":
+      return {
+        tone: "success" as const,
+        text: "The saved restart checkpoint was discarded.",
+      };
+    case "checkpoint-restart-invalid":
+      return {
+        tone: "error" as const,
+        text: "The saved restart checkpoint could not be used. Refresh the dashboard and try again.",
+      };
     default:
       return null;
   }
@@ -186,6 +205,7 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
     getBootstrapState(),
     resolveActiveLiveSyncRun(),
     getCronInvocations(10),
+    getLiveSyncRestartCheckpoint(),
   ]);
 
   return {
@@ -210,6 +230,8 @@ async function loadDashboardData(now: Date): Promise<DashboardData> {
         : { firstFullSyncCompletedAt: null },
     activeRun: results[5].status === "fulfilled" ? results[5].value : null,
     cronInvocations: results[6].status === "fulfilled" ? results[6].value : [],
+    restartCheckpoint:
+      results[7].status === "fulfilled" ? results[7].value : null,
     degraded: results.some((result) => result.status === "rejected"),
   };
 }
@@ -230,6 +252,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
     bootstrap,
     activeRun,
     cronInvocations,
+    restartCheckpoint,
     degraded,
   } = await loadDashboardData(now);
   const upcoming = getUpcomingSyncDates(now, settings);
@@ -313,6 +336,54 @@ export default async function DashboardPage(props: DashboardPageProps) {
       {activeRun ? (
         <section className="mt-8">
           <ActiveSyncRunPanel initialRun={activeRun} />
+        </section>
+      ) : null}
+
+      {!activeRun && restartCheckpoint ? (
+        <section className="mt-8">
+          <article className="glass-panel rounded-[1.75rem] p-6">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.3em] text-accent-strong">
+                  Saved checkpoint
+                </p>
+                <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-foreground">
+                  {restartCheckpoint.mode === "full" ? "Full" : "Delta"} sync
+                  ready to restart
+                </h2>
+                <p className="mt-3 text-sm leading-7 text-muted">
+                  Saved {formatTimestamp(restartCheckpoint.createdAt)} after{" "}
+                  {restartCheckpoint.productsScanned.toLocaleString()} Shopify
+                  products, {restartCheckpoint.chunksCompleted.toLocaleString()}{" "}
+                  completed chunk
+                  {restartCheckpoint.chunksCompleted === 1 ? "" : "s"}, and{" "}
+                  {restartCheckpoint.stage.replaceAll("_", " ")} phase.
+                </p>
+                <p className="mt-2 text-sm leading-7 text-muted">
+                  Frozen delta window: {formatTimestamp(restartCheckpoint.windowFrozenAt)}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <form action={restartCheckpointAction}>
+                  <button
+                    type="submit"
+                    className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+                  >
+                    Restart from checkpoint
+                  </button>
+                </form>
+                <form action={discardCheckpointAction}>
+                  <button
+                    type="submit"
+                    className="rounded-full border border-line bg-white/80 px-5 py-3 text-sm font-semibold text-accent-strong transition-colors hover:bg-white"
+                  >
+                    Discard checkpoint
+                  </button>
+                </form>
+              </div>
+            </div>
+          </article>
         </section>
       ) : null}
 

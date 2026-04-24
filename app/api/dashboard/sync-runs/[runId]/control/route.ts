@@ -32,14 +32,18 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
   const { runId } = await params;
   const body = (await request.json().catch(() => null)) as
-    | { action?: "pause" | "resume" }
+    | { action?: "pause" | "resume" | "stop" }
     | null;
 
-  if (body?.action !== "pause" && body?.action !== "resume") {
+  if (
+    body?.action !== "pause" &&
+    body?.action !== "resume" &&
+    body?.action !== "stop"
+  ) {
     return NextResponse.json(
       {
         ok: false,
-        message: "Use action=pause or action=resume.",
+        message: "Use action=pause, action=resume, or action=stop.",
       },
       { status: 400 },
     );
@@ -64,6 +68,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
           message:
             "Pause requested. The sync will stop after the current batch finishes.",
         }
+      : body.action === "stop"
+        ? {
+            controlState: "stop_requested" as const,
+            message:
+              "Stop requested. The sync will save a restart checkpoint at the next safe boundary.",
+          }
       : {
           controlState: "running" as const,
           message: "Resume requested. The sync will continue shortly.",

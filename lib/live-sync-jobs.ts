@@ -2,12 +2,15 @@ import { getRun, start } from "workflow/api";
 import {
   clearActiveSyncRun,
   getActiveSyncRun,
+  getLiveSyncRestartCheckpoint,
+  readLiveSyncRestartCheckpointPayload,
   setActiveSyncRun,
   updateCronInvocationByRunId,
   type SyncHistoryPurpose,
   type SyncSettings,
 } from "@/lib/operator-store";
 import { LIVE_SYNC_CHUNK_PRODUCT_TARGET } from "@/lib/sync";
+import type { LiveSyncRestartCheckpointPayload } from "@/workflows/live-merchant-sync";
 import { liveMerchantSyncWorkflow } from "@/workflows/live-merchant-sync";
 import { testSaveExportWorkflow } from "@/workflows/test-save-export";
 
@@ -123,6 +126,70 @@ export async function startLiveSyncJob(input: {
       input.mode === "full"
         ? "Queued chunked full sync."
         : "Queued chunked delta sync.",
+  });
+
+  return {
+    ok: true as const,
+    runId: run.runId,
+    startedAt,
+  };
+}
+
+export async function restartLiveSyncFromCheckpointJob() {
+  const activeRun = await resolveActiveLiveSyncRun();
+
+  if (activeRun) {
+    return {
+      ok: false as const,
+      activeRun,
+    };
+  }
+
+  const checkpoint = await getLiveSyncRestartCheckpoint();
+
+  if (!checkpoint) {
+    return {
+      ok: false as const,
+      message: "No saved checkpoint is available to restart.",
+    };
+  }
+
+  const payload =
+    await readLiveSyncRestartCheckpointPayload<LiveSyncRestartCheckpointPayload>();
+
+  if (!payload) {
+    return {
+      ok: false as const,
+      message:
+        "The saved checkpoint payload could not be loaded. Refresh the dashboard and try again.",
+    };
+  }
+
+  const startedAt = new Date().toISOString();
+  const run = await start(liveMerchantSyncWorkflow, [
+    {
+      mode: checkpoint.mode,
+      trigger: checkpoint.trigger,
+      purpose: checkpoint.purpose,
+      settings: payload.input.settings,
+      chunkTargetProducts: payload.input.chunkTargetProducts,
+      startedAt,
+      windowFrozenAt: payload.input.windowFrozenAt,
+      allowDeltaFallback: payload.input.allowDeltaFallback,
+      restartCheckpointId: checkpoint.id,
+    },
+  ]);
+
+  await setQueuedActiveRun({
+    runId: run.runId,
+    startedAt,
+    trigger: checkpoint.trigger,
+    purpose: checkpoint.purpose,
+    mode: checkpoint.mode,
+    message:
+      checkpoint.mode === "full"
+        ? "Restarting full sync from saved checkpoint."
+        : "Restarting delta sync from saved checkpoint.",
   });
 
   return {

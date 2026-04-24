@@ -178,7 +178,11 @@ export interface ActiveSyncRunState {
   purpose: SyncHistoryPurpose;
   mode: "delta" | "full";
   status: "queued" | "running" | "completed" | "failed";
-  controlState: "running" | "pause_requested" | "paused";
+  controlState:
+    | "running"
+    | "pause_requested"
+    | "paused"
+    | "stop_requested";
   chunkTargetProducts: number;
   chunksCompleted: number;
   message: string;
@@ -197,6 +201,28 @@ export interface ActiveSyncRunState {
   budget: SyncBudgetSnapshot | null;
 }
 
+export interface LiveSyncRestartCheckpointState {
+  id: string;
+  artifactId: string;
+  createdAt: string;
+  sourceRunId: string;
+  mode: "delta" | "full";
+  trigger: "cron" | "manual";
+  purpose: SyncHistoryPurpose;
+  message: string;
+  stage: "scanning" | "reconciling" | "deletes" | "pending_deletes";
+  windowFrozenAt: string;
+  totalProducts: number | null;
+  productsScanned: number;
+  pagesScanned: number;
+  chunksCompleted: number;
+  merchantPhase: "reconciling" | "upserts" | "deletes" | null;
+  merchantPagesScanned: number;
+  merchantRowsScanned: number;
+  merchantMatchedRows: number;
+  merchantDeleteTargets: number;
+}
+
 interface BootstrapState {
   firstFullSyncCompletedAt: string | null;
 }
@@ -209,6 +235,7 @@ interface OperatorState {
   cronInvocations: CronInvocationEntry[];
   bootstrap: BootstrapState;
   activeSyncRun: ActiveSyncRunState | null;
+  restartCheckpoint: LiveSyncRestartCheckpointState | null;
 }
 
 type StorageMode = "neon" | "blob" | "local" | "memory";
@@ -243,6 +270,7 @@ function defaultState(): OperatorState {
       firstFullSyncCompletedAt: null,
     },
     activeSyncRun: null,
+    restartCheckpoint: null,
   };
 }
 
@@ -431,6 +459,60 @@ function sanitizeSyncBudgetSnapshot(
   } satisfies SyncBudgetSnapshot;
 }
 
+function sanitizeRestartCheckpoint(
+  input: Partial<LiveSyncRestartCheckpointState> | null | undefined,
+) {
+  if (
+    !input?.id ||
+    !input?.artifactId ||
+    (input.mode !== "delta" && input.mode !== "full")
+  ) {
+    return null;
+  }
+
+  return {
+    id: input.id,
+    artifactId: input.artifactId,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    sourceRunId: input.sourceRunId ?? "",
+    mode: input.mode,
+    trigger: input.trigger === "cron" ? "cron" : "manual",
+    purpose: input.purpose === "test-save" ? "test-save" : "sync",
+    message: input.message ?? "",
+    stage:
+      input.stage === "reconciling" ||
+      input.stage === "deletes" ||
+      input.stage === "pending_deletes"
+        ? input.stage
+        : "scanning",
+    windowFrozenAt: input.windowFrozenAt ?? input.createdAt ?? new Date().toISOString(),
+    totalProducts:
+      typeof input.totalProducts === "number" ? input.totalProducts : null,
+    productsScanned: Math.max(0, Number(input.productsScanned ?? 0)),
+    pagesScanned: Math.max(0, Number(input.pagesScanned ?? 0)),
+    chunksCompleted: Math.max(0, Number(input.chunksCompleted ?? 0)),
+    merchantPhase:
+      input.merchantPhase === "reconciling" ||
+      input.merchantPhase === "upserts" ||
+      input.merchantPhase === "deletes"
+        ? input.merchantPhase
+        : null,
+    merchantPagesScanned: Math.max(
+      0,
+      Number(input.merchantPagesScanned ?? 0),
+    ),
+    merchantRowsScanned: Math.max(0, Number(input.merchantRowsScanned ?? 0)),
+    merchantMatchedRows: Math.max(
+      0,
+      Number(input.merchantMatchedRows ?? 0),
+    ),
+    merchantDeleteTargets: Math.max(
+      0,
+      Number(input.merchantDeleteTargets ?? 0),
+    ),
+  } satisfies LiveSyncRestartCheckpointState;
+}
+
 function sanitizeState(input: Partial<OperatorState> | null | undefined) {
   const history = Array.isArray(input?.history)
     ? input.history.slice(0, HISTORY_LIMIT).map((entry) => ({
@@ -528,7 +610,8 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
                 : "queued",
             controlState:
               input.activeSyncRun.controlState === "pause_requested" ||
-              input.activeSyncRun.controlState === "paused"
+              input.activeSyncRun.controlState === "paused" ||
+              input.activeSyncRun.controlState === "stop_requested"
                 ? input.activeSyncRun.controlState
                 : "running",
             chunkTargetProducts: readPositiveInteger(
@@ -595,6 +678,7 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
             budget: sanitizeSyncBudgetSnapshot(input.activeSyncRun.budget),
           }
         : null,
+    restartCheckpoint: sanitizeRestartCheckpoint(input?.restartCheckpoint),
   } satisfies OperatorState;
 }
 
@@ -1267,6 +1351,69 @@ export async function clearActiveSyncRun(runId: string) {
     activeSyncRun: null,
   });
 
+  return true;
+}
+
+export async function getLiveSyncRestartCheckpoint() {
+  const state = await readState();
+  return state.restartCheckpoint;
+}
+
+export async function saveLiveSyncRestartCheckpoint<T>(params: {
+  checkpoint: LiveSyncRestartCheckpointState;
+  payload: T;
+}) {
+  const state = await readState();
+  const nextCheckpoint = sanitizeRestartCheckpoint(params.checkpoint);
+
+  if (!nextCheckpoint) {
+    throw new Error("Live sync restart checkpoint is invalid.");
+  }
+
+  await writeRunArtifact(nextCheckpoint.artifactId, params.payload);
+
+  await writeState({
+    ...state,
+    restartCheckpoint: nextCheckpoint,
+  });
+
+  if (
+    state.restartCheckpoint &&
+    state.restartCheckpoint.artifactId !== nextCheckpoint.artifactId
+  ) {
+    await deleteRunArtifactById(state.restartCheckpoint.artifactId);
+  }
+
+  return nextCheckpoint;
+}
+
+export async function readLiveSyncRestartCheckpointPayload<T = unknown>() {
+  const checkpoint = await getLiveSyncRestartCheckpoint();
+
+  if (!checkpoint) {
+    return null;
+  }
+
+  return readRunArtifact<T>(checkpoint.artifactId);
+}
+
+export async function clearLiveSyncRestartCheckpoint(id?: string | null) {
+  const state = await readState();
+  const checkpoint = state.restartCheckpoint;
+
+  if (!checkpoint) {
+    return false;
+  }
+
+  if (id && checkpoint.id !== id) {
+    return false;
+  }
+
+  await writeState({
+    ...state,
+    restartCheckpoint: null,
+  });
+  await deleteRunArtifactById(checkpoint.artifactId);
   return true;
 }
 
