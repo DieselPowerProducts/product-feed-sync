@@ -1,6 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { isAuthorizedCronRequest } from "@/lib/env";
+import {
+  isAuthorizedCronSchedulerRequest,
+  VERCEL_CRON_USER_AGENT,
+} from "@/lib/env";
 import { startLiveSyncJob } from "@/lib/live-sync-jobs";
 import {
   appendCronInvocation,
@@ -86,22 +89,17 @@ export async function GET(request: NextRequest) {
   const userAgent = request.headers.get("user-agent");
   const authorizationPresent = Boolean(request.headers.get("authorization"));
 
-  if (!isAuthorizedCronRequest(request)) {
-    await recordCronInvocation({
-      firedAt,
+  if (!isAuthorizedCronSchedulerRequest(request)) {
+    console.warn("[cron/sync] Rejected non-scheduler request.", {
       path,
       userAgent,
       authorizationPresent,
-      authorized: false,
-      decisionMode: null,
-      outcome: "unauthorized",
-      runId: null,
-      message: "Rejected unauthorized cron request.",
+      expectedUserAgent: VERCEL_CRON_USER_AGENT,
     });
     return NextResponse.json(
       {
         ok: false,
-        error: "Unauthorized cron request.",
+        error: "Only the Vercel cron scheduler may invoke this route.",
       },
       { status: 401 },
     );

@@ -36,10 +36,6 @@ const starterRoutes = [
     path: "/api/cron/sync",
     description: "Vercel cron entrypoint. It decides whether today is a delta run, a full run, or a no-op day.",
   },
-  {
-    path: "/api/sync/test?mode=delta&dryRun=1&limit=5",
-    description: "Protected manual test route for live Shopify previews outside the dashboard.",
-  },
 ];
 
 export default function SetupPage() {
@@ -109,6 +105,7 @@ export default function SetupPage() {
                   <p>One-time delta/full comparison exports run immediately from the dashboard and are stored as test-save files.</p>
                   <p>Live Merchant API writes now run when dry run is disabled, with full-sync reconciliation deleting stale Merchant rows.</p>
                   <p>Delta now runs from scheduled Shopify reads only. Only hard deletes use a lightweight Shopify webhook.</p>
+                  <p>External tokenized manual sync endpoints are retired. Operator-triggered work now stays inside the dashboard.</p>
                 </div>
               </div>
             </div>

@@ -566,6 +566,7 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
           runId: entry.runId ?? null,
           message: entry.message ?? "",
         }))
+        .filter((entry) => entry.authorized)
         .sort((left, right) => right.firedAt.localeCompare(left.firedAt))
         .slice(0, CRON_INVOCATION_LIMIT)
     : [];

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
 const falsy = new Set(["0", "false", "no", "off"]);
+export const VERCEL_CRON_USER_AGENT = "vercel-cron/1.0";
 
 function hasValue(value?: string) {
   return Boolean(value?.trim());
@@ -106,6 +107,16 @@ export function isAuthorizedCronRequest(request: NextRequest) {
   }
 
   return request.headers.get("authorization") === `Bearer ${env.cronSecret}`;
+}
+
+export function isVercelCronSchedulerRequest(request: NextRequest) {
+  return request.headers.get("user-agent")?.trim() === VERCEL_CRON_USER_AGENT;
+}
+
+export function isAuthorizedCronSchedulerRequest(request: NextRequest) {
+  return (
+    isAuthorizedCronRequest(request) && isVercelCronSchedulerRequest(request)
+  );
 }
 
 export function isAuthorizedManualRequest(request: NextRequest) {

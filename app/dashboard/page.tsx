@@ -534,13 +534,13 @@ export default async function DashboardPage(props: DashboardPageProps) {
               Scheduled trigger monitor
             </p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
-              Vercel cron contact history
+              Authorized Vercel cron history
             </h2>
           </div>
           <p className="text-sm text-muted">
-            These rows prove whether Vercel actually called the cron route. The
-            backup triggers skip if the due delta or full already completed for
-            the current cron window.
+            These rows show only real Vercel scheduler contacts. Rejected
+            probes do not persist here, and backup triggers skip if the due
+            delta or full already completed for the current cron window.
           </p>
         </div>
 
@@ -639,8 +639,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </div>
         ) : (
           <div className="mt-6 rounded-[1.5rem] border border-dashed border-line bg-white/55 p-6 text-sm text-muted">
-            No Vercel cron contact has been recorded yet. The next primary or
-            backup cron request will appear here.
+            No authorized Vercel cron contact has been recorded yet. The next
+            primary or backup scheduler request will appear here.
           </div>
         )}
       </section>
