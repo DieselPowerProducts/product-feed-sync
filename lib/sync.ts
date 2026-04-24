@@ -485,6 +485,7 @@ export interface DeletePreviewSample extends ExcludedPreviewSample {
 export interface SyncSearchPlan {
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   source:
     | "full_catalog"
     | "live_sync_checkpoint"
@@ -507,6 +508,7 @@ export interface SyncRunArtifact {
   scope: string;
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   exportArtifactId?: string | null;
   notes: string[];
   stats: SyncRunResult["stats"];
@@ -532,6 +534,7 @@ export interface SyncRunResult {
   notes: string[];
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   storefrontBaseUrl: string | null;
   stats: {
     pageSize: number;
@@ -568,6 +571,7 @@ export interface SyncExportResult {
   notes: string[];
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   stats: SyncRunResult["stats"];
   exclusions: Record<string, number>;
   rows: FeedPreviewRecord[];
@@ -595,6 +599,7 @@ export interface SyncExecutionContext {
   searchPlan: SyncSearchPlan;
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   searchNotes: string[];
   shop: string;
   accessToken: string;
@@ -1603,10 +1608,14 @@ export function buildSyncScope(
       : "Shopify products are sampled across all statuses from the full catalog for previewing.";
   }
 
-  if (searchPlan.source === "live_sync_checkpoint" && searchPlan.lookbackStart) {
+  if (
+    searchPlan.source === "live_sync_checkpoint" &&
+    searchPlan.lookbackStart &&
+    searchPlan.lookbackEnd
+  ) {
     return exhaustive
-      ? `Shopify products changed after ${searchPlan.lookbackStart} are scanned exhaustively using the last successful live-sync checkpoint, including inactive or excluded products that now need Merchant deletes.`
-      : `Shopify products changed after ${searchPlan.lookbackStart} are sampled using the last successful live-sync checkpoint.`;
+      ? `Shopify products changed after ${searchPlan.lookbackStart} and at or before ${searchPlan.lookbackEnd} are scanned exhaustively using the last successful live-sync checkpoint, including inactive or excluded products that now need Merchant deletes.`
+      : `Shopify products changed after ${searchPlan.lookbackStart} and at or before ${searchPlan.lookbackEnd} are sampled using the last successful live-sync checkpoint.`;
   }
 
   return exhaustive
@@ -1614,26 +1623,30 @@ export function buildSyncScope(
     : "Shopify delta preview is using the stored live-sync checkpoint.";
 }
 
-function buildLiveSyncCheckpointQuery(lookbackStart: string) {
-  return `updated_at:>'${lookbackStart}'`;
+function buildLiveSyncCheckpointQuery(
+  lookbackStart: string,
+  lookbackEnd: string,
+) {
+  return `updated_at:>'${lookbackStart}' updated_at:<='${lookbackEnd}'`;
 }
 
 async function buildSearchQuery(
   mode: Exclude<SyncMode, "idle">,
   settings: SyncSettings,
-  _options?: {
+  options?: {
     dryRun: boolean;
     now?: Date;
     allowDeltaFallback?: boolean;
   },
 ): Promise<SyncSearchPlan> {
   void settings;
-  void _options;
+  const effectiveNow = options?.now ?? new Date();
 
   if (mode === "full") {
     return {
       query: "",
       lookbackStart: null,
+      lookbackEnd: null,
       source: "full_catalog",
       notes: [
         "Full sync scans all Shopify product statuses. Feed inserts still only include active, non-excluded, valid rows.",
@@ -1652,13 +1665,16 @@ async function buildSearchQuery(
   const lookbackStart = new Date(
     Date.parse(latestLiveSync.finishedAt) - 5 * MS_PER_MINUTE,
   ).toISOString();
+  const lookbackEnd = effectiveNow.toISOString();
 
   return {
-    query: buildLiveSyncCheckpointQuery(lookbackStart),
+    query: buildLiveSyncCheckpointQuery(lookbackStart, lookbackEnd),
     lookbackStart,
+    lookbackEnd,
     source: "live_sync_checkpoint",
     notes: [
-      `Delta scope uses Shopify products changed after ${lookbackStart} based on the last successful live sync checkpoint, with a 5-minute overlap safety buffer.`,
+      `Delta scope uses Shopify products changed after ${lookbackStart} and at or before ${lookbackEnd}, based on the last successful live sync checkpoint with a 5-minute overlap safety buffer.`,
+      "Changes made after this run started are intentionally held for the next delta run.",
     ],
   };
 }
@@ -2200,6 +2216,7 @@ export async function prepareSyncExecutionContext(params: {
     searchPlan,
     query: searchPlan.query,
     lookbackStart: searchPlan.lookbackStart,
+    lookbackEnd: searchPlan.lookbackEnd ?? null,
     searchNotes: searchPlan.notes,
     shop,
     accessToken: token.accessToken,
@@ -2762,6 +2779,7 @@ async function buildDryRunPreview(params: {
     searchPlan: context.searchPlan,
     query: context.query,
     lookbackStart: context.lookbackStart,
+    lookbackEnd: context.lookbackEnd ?? null,
     searchNotes: context.searchNotes,
     storefrontBaseUrl: context.storefrontBaseUrl,
     allRecords,
@@ -2993,6 +3011,7 @@ function toHistoryEntry(
     scope: `${result.scope}${result.exhaustive ? " [exhaustive]" : ""}`,
     query: result.query,
     lookbackStart: result.lookbackStart,
+    lookbackEnd: result.lookbackEnd ?? null,
     artifactId,
     exportArtifactId: result.exportArtifactId ?? null,
     notes: result.notes.slice(0, 8),
@@ -3018,6 +3037,7 @@ export async function runSync(
 ): Promise<SyncRunResult> {
   const settings = options.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
+  const effectiveNow = options.effectiveNow ?? new Date(startedAt);
   const purpose = options.purpose ?? "sync";
   const dryRun = purpose === "test-save" ? true : options.dryRun ?? false;
   const exhaustive = dryRun
@@ -3047,7 +3067,7 @@ export async function runSync(
       settings,
       exhaustive,
       dryRun,
-      effectiveNow: options.effectiveNow,
+      effectiveNow,
       collectAllRecords: options.prepareExportArtifact || !dryRun,
       captureDeleteCandidates:
         !dryRun || purpose === "test-save" || (options.persistHistory ?? true),
@@ -3162,7 +3182,7 @@ export async function runSync(
     }
     if (options.effectiveNow) {
       notes.unshift(
-        `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
+        `This test run used an effective timestamp of ${effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
       );
     }
 
@@ -3180,6 +3200,7 @@ export async function runSync(
       notes,
       query: previewRun.query,
       lookbackStart: previewRun.lookbackStart,
+      lookbackEnd: previewRun.lookbackEnd ?? null,
       storefrontBaseUrl: previewRun.storefrontBaseUrl,
       stats: {
         pageSize: SHOPIFY_PAGE_SIZE,
@@ -3217,6 +3238,7 @@ export async function runSync(
         notes,
         query: previewRun.query,
         lookbackStart: previewRun.lookbackStart,
+        lookbackEnd: previewRun.lookbackEnd ?? null,
         stats: result.stats,
         exclusions: previewRun.exclusions,
         rows: previewRun.allRecords,
@@ -3240,6 +3262,7 @@ export async function runSync(
         scope: result.scope,
         query: result.query,
         lookbackStart: result.lookbackStart,
+        lookbackEnd: result.lookbackEnd ?? null,
         exportArtifactId: result.exportArtifactId ?? null,
         notes: result.notes,
         stats: result.stats,
@@ -3261,11 +3284,12 @@ export async function runSync(
       error instanceof Error ? error.message : "Unknown sync execution error.";
     const search = await buildSearchQuery(mode, settings, {
       dryRun,
-      now: options.effectiveNow,
+      now: effectiveNow,
       allowDeltaFallback: options.allowDeltaFallback,
     }).catch(() => ({
       query: mode === "full" ? "" : "",
       lookbackStart: null,
+      lookbackEnd: null,
       source: mode === "full" ? "full_catalog" : "live_sync_checkpoint",
       notes: [],
     } satisfies SyncSearchPlan));
@@ -3284,7 +3308,7 @@ export async function runSync(
       notes: [
         ...(options.effectiveNow
           ? [
-              `This test run used an effective timestamp of ${options.effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
+              `This test run used an effective timestamp of ${effectiveNow.toISOString()} for delta-window calculation and scheduling simulation.`,
             ]
           : []),
         ...search.notes,
@@ -3295,6 +3319,7 @@ export async function runSync(
       ],
       query: search.query,
       lookbackStart: search.lookbackStart,
+      lookbackEnd: search.lookbackEnd ?? null,
       storefrontBaseUrl: null,
       stats: {
         pageSize: SHOPIFY_PAGE_SIZE,
@@ -3329,6 +3354,7 @@ export async function runSync(
         scope: result.scope,
         query: result.query,
         lookbackStart: result.lookbackStart,
+        lookbackEnd: result.lookbackEnd ?? null,
         exportArtifactId: result.exportArtifactId ?? null,
         notes: result.notes,
         stats: result.stats,
@@ -3356,6 +3382,7 @@ export async function runSyncExport(
 ): Promise<SyncExportResult> {
   const settings = options?.settings ?? (await getSyncSettings());
   const startedAt = new Date().toISOString();
+  const effectiveNow = new Date(startedAt);
   const dryRun = options?.dryRun ?? false;
   const exhaustive = true;
 
@@ -3366,6 +3393,7 @@ export async function runSyncExport(
     settings,
     exhaustive,
     dryRun,
+    effectiveNow,
     collectAllRecords: true,
     allowDeltaFallback: true,
   });
@@ -3392,6 +3420,7 @@ export async function runSyncExport(
     }),
     query: previewRun.query,
     lookbackStart: previewRun.lookbackStart,
+    lookbackEnd: previewRun.lookbackEnd ?? null,
     stats: {
       pageSize: SHOPIFY_PAGE_SIZE,
       pagesScanned: previewRun.pagesScanned,

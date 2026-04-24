@@ -354,6 +354,7 @@ function toHistoryEntry(result: SyncRunResult, artifactId: string | null) {
     scope: `${result.scope}${result.exhaustive ? " [exhaustive]" : ""}`,
     query: result.query,
     lookbackStart: result.lookbackStart,
+    lookbackEnd: result.lookbackEnd ?? null,
     artifactId,
     exportArtifactId: result.exportArtifactId ?? null,
     notes: result.notes.slice(0, 8),
@@ -585,6 +586,7 @@ async function initializeExportArtifactStep(params: {
     notes: ["Live sync export artifact is running in chunked mode."],
     query: params.context.query,
     lookbackStart: params.context.lookbackStart,
+    lookbackEnd: params.context.lookbackEnd ?? null,
     stats: {
       pageSize: 250,
       pagesScanned: 0,
@@ -861,6 +863,7 @@ async function persistSuccessfulRunStep(params: {
     notes,
     query: params.context.query,
     lookbackStart: params.context.lookbackStart,
+    lookbackEnd: params.context.lookbackEnd ?? null,
     stats: {
       pageSize: 250,
       pagesScanned: params.pagesScanned,
@@ -904,6 +907,7 @@ async function persistSuccessfulRunStep(params: {
     notes,
     query: params.context.query,
     lookbackStart: params.context.lookbackStart,
+    lookbackEnd: params.context.lookbackEnd ?? null,
     storefrontBaseUrl: params.context.storefrontBaseUrl,
     stats: {
       pageSize: 250,
@@ -958,6 +962,7 @@ async function persistSuccessfulRunStep(params: {
     scope: result.scope,
     query: result.query,
     lookbackStart: result.lookbackStart,
+    lookbackEnd: result.lookbackEnd ?? null,
     exportArtifactId: params.exportArtifactId,
     notes: result.notes,
     stats: result.stats,
@@ -1035,6 +1040,7 @@ async function persistFailedRunStep(params: {
     ],
     query: params.context?.query ?? "",
     lookbackStart: params.context?.lookbackStart ?? null,
+    lookbackEnd: params.context?.lookbackEnd ?? null,
     storefrontBaseUrl: params.context?.storefrontBaseUrl ?? null,
     stats: {
       pageSize: 250,
@@ -1068,6 +1074,7 @@ async function persistFailedRunStep(params: {
     scope: result.scope,
     query: result.query,
     lookbackStart: result.lookbackStart,
+    lookbackEnd: result.lookbackEnd ?? null,
     exportArtifactId: null,
     notes: result.notes,
     stats: result.stats,

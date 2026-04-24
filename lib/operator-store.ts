@@ -84,6 +84,7 @@ export interface SyncHistoryEntry {
   scope: string;
   query: string;
   lookbackStart: string | null;
+  lookbackEnd?: string | null;
   artifactId?: string | null;
   exportArtifactId?: string | null;
   notes: string[];
@@ -1588,6 +1589,7 @@ export async function seedSuccessfulLiveSyncBaseline(params: {
       "All Shopify products are scanned across active, draft, and archived statuses so current feed rows can be inserted and inactive rows can be deleted from Merchant Center.",
     query: "",
     lookbackStart: null,
+    lookbackEnd: null,
     artifactId,
     exportArtifactId: null,
     notes,
@@ -1618,6 +1620,7 @@ export async function seedSuccessfulLiveSyncBaseline(params: {
     scope: entry.scope,
     query: entry.query,
     lookbackStart: null,
+    lookbackEnd: null,
     exportArtifactId: null,
     notes,
     stats: entry.stats,
