@@ -23,7 +23,8 @@ Primary controls:
 Important limitation:
 
 - Changing settings in the dashboard changes sync decision logic only.
-- The actual cron clock is fixed at `0 9 * * *` (`09:00 UTC`) in Vercel.
+- The actual cron clock is fixed in Vercel: primary `09:00 UTC`, backup checks at `10:00`, `11:00`, and `12:00 UTC`.
+- Backup checks start at most one retry for the current daily window. After one success or two started attempts, later backup checks skip.
 
 ## Day-to-day operator guide
 

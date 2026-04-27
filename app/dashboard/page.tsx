@@ -519,7 +519,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   , with backup checks at <code>10:00</code>,{" "}
                   <code>11:00</code>, and <code>12:00 UTC</code>.
                   <br />
-                  The UI controls cadence logic, not the cron clock itself.
+                  Backup checks skip after one successful run or two started
+                  attempts in the current daily window.
                 </p>
               </div>
             </article>
@@ -540,7 +541,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <p className="text-sm text-muted">
             These rows show only real Vercel scheduler contacts. Rejected
             probes do not persist here, and backup triggers skip if the due
-            delta or full already completed for the current cron window.
+            delta or full already completed or used its one retry for the
+            current cron window.
           </p>
         </div>
 
@@ -608,6 +610,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
                             entry.outcome === "completed" ||
                             entry.outcome === "queued" ||
                             entry.outcome === "skipped_duplicate" ||
+                            entry.outcome === "skipped_retry_limit" ||
                             entry.outcome === "skipped_idle"
                               ? "font-semibold text-success"
                               : "font-semibold text-accent-strong"

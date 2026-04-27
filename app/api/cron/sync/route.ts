@@ -7,6 +7,7 @@ import {
 import { startLiveSyncJob } from "@/lib/live-sync-jobs";
 import {
   appendCronInvocation,
+  getCronInvocations,
   getSyncHistory,
   getSyncSettings,
   type CronInvocationEntry,
@@ -48,10 +49,13 @@ async function hasSuccessfulSyncForCronWindow(params: {
   mode: "delta" | "full";
   windowStart: Date;
 }) {
-  const history = await getSyncHistory(20);
+  const [history, cronInvocations] = await Promise.all([
+    getSyncHistory(20),
+    getCronInvocations(30),
+  ]);
   const windowStartMs = params.windowStart.getTime();
 
-  return history.some((entry) => {
+  const successfulHistoryEntry = history.some((entry) => {
     if (
       !entry.ok ||
       entry.dryRun ||
@@ -64,6 +68,51 @@ async function hasSuccessfulSyncForCronWindow(params: {
     const startedAtMs = new Date(entry.startedAt).getTime();
     return Number.isFinite(startedAtMs) && startedAtMs >= windowStartMs;
   });
+
+  if (successfulHistoryEntry) {
+    return true;
+  }
+
+  return cronInvocations.some((entry) => {
+    if (
+      entry.decisionMode !== params.mode ||
+      entry.outcome !== "completed"
+    ) {
+      return false;
+    }
+
+    const firedAtMs = new Date(entry.firedAt).getTime();
+    return Number.isFinite(firedAtMs) && firedAtMs >= windowStartMs;
+  });
+}
+
+async function countStartedCronAttemptsForWindow(params: {
+  mode: "delta" | "full";
+  windowStart: Date;
+}) {
+  const cronInvocations = await getCronInvocations(30);
+  const windowStartMs = params.windowStart.getTime();
+  const startedRunIds = new Set<string>();
+
+  for (const entry of cronInvocations) {
+    if (
+      entry.decisionMode !== params.mode ||
+      !entry.runId ||
+      !["queued", "completed", "cancelled", "failed"].includes(entry.outcome)
+    ) {
+      continue;
+    }
+
+    const firedAtMs = new Date(entry.firedAt).getTime();
+
+    if (!Number.isFinite(firedAtMs) || firedAtMs < windowStartMs) {
+      continue;
+    }
+
+    startedRunIds.add(entry.runId);
+  }
+
+  return startedRunIds.size;
 }
 
 async function recordCronInvocation(
@@ -154,6 +203,33 @@ export async function GET(request: NextRequest) {
         skipped: true,
         decision,
         message,
+      });
+    }
+
+    const startedAttempts = await countStartedCronAttemptsForWindow({
+      mode: decision.mode,
+      windowStart,
+    });
+
+    if (startedAttempts >= 2) {
+      const message = `Two scheduled ${decision.mode} sync attempts have already started after ${windowStart.toISOString()}, so no more backup cron invocations will run for this window.`;
+      await recordCronInvocation({
+        firedAt,
+        path,
+        userAgent,
+        authorizationPresent,
+        authorized: true,
+        decisionMode: decision.mode,
+        outcome: "skipped_retry_limit",
+        runId: null,
+        message,
+      });
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        decision,
+        message,
+        startedAttempts,
       });
     }
 

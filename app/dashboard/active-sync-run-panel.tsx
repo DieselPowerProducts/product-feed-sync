@@ -141,7 +141,7 @@ function progressSummary(progress: LiveSyncProgress | null) {
   }
 
   if (progress.controlState === "pause_requested") {
-    return "Pause requested. The workflow will stop at the next safe checkpoint.";
+    return "Budget stop requested. The workflow will save a restart checkpoint at the next safe checkpoint.";
   }
 
   if (progress.controlState === "stop_requested") {

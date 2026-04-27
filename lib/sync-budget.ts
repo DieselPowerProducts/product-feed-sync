@@ -316,7 +316,7 @@ export function evaluateSyncBudget(params: {
           : functionsExceeded
             ? "Projected Vercel workflow function activity moved above the safe budget."
             : "Projected network transfer moved above the safe budget.";
-    summary = `${pauseReason} The workflow should pause at the next checkpoint.`;
+    summary = `${pauseReason} The workflow should stop at the next safe checkpoint.`;
   } else if (
     Boolean(warningDurationMs && usage.elapsedMs > warningDurationMs) ||
     Boolean(
@@ -331,7 +331,7 @@ export function evaluateSyncBudget(params: {
   ) {
     status = "warning";
     summary =
-      "Run budget is drifting high. Watch the live metrics and pause if you need to inspect the current chunk.";
+      "Run budget is drifting high. Watch the live metrics and stop the run if you need to inspect the current chunk.";
   }
 
   return {

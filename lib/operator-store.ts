@@ -131,6 +131,7 @@ export interface CronInvocationEntry {
     | "cancelled"
     | "skipped_idle"
     | "skipped_duplicate"
+    | "skipped_retry_limit"
     | "skipped_active_run"
     | "unauthorized"
     | "failed";
@@ -558,6 +559,7 @@ function sanitizeState(input: Partial<OperatorState> | null | undefined) {
             entry.outcome === "cancelled" ||
             entry.outcome === "skipped_idle" ||
             entry.outcome === "skipped_duplicate" ||
+            entry.outcome === "skipped_retry_limit" ||
             entry.outcome === "skipped_active_run" ||
             entry.outcome === "unauthorized" ||
             entry.outcome === "failed"

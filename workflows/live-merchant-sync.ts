@@ -644,11 +644,11 @@ async function loadBudgetProfileStep(input: LiveMerchantSyncWorkflowInput) {
   });
 }
 
-async function requestBudgetPauseStep(runId: string, message: string) {
+async function requestBudgetStopStep(runId: string, message: string) {
   "use step";
   const { updateActiveSyncRun } = await import("@/lib/operator-store");
   await updateActiveSyncRun(runId, {
-    controlState: "pause_requested",
+    controlState: "stop_requested",
     message,
   });
 }
@@ -1470,7 +1470,7 @@ export async function liveMerchantSyncWorkflow(
       const finishedAt = new Date().toISOString();
 
       return {
-        ok: true,
+        ok: false,
         trigger: input.trigger,
         purpose: input.purpose ?? "sync",
         mode: input.mode,
@@ -1640,7 +1640,7 @@ export async function liveMerchantSyncWorkflow(
           progress: stopProgress,
         },
         stopProgress,
-        "completed",
+        "failed",
         startedAt,
       );
       await publishWorkflowEvent(
@@ -1648,13 +1648,13 @@ export async function liveMerchantSyncWorkflow(
         {
           type: "result",
           result: {
-            ok: true,
+            ok: false,
             finishedAt: new Date().toISOString(),
             message: checkpointMessage,
           },
         },
         undefined,
-        "completed",
+        "failed",
       );
       budgetUsage.vercelFunctionsUsed += 1;
       budgetUsage.neonOpsUsed += 1;
@@ -1670,14 +1670,15 @@ export async function liveMerchantSyncWorkflow(
       }
 
       const pauseMessage = progress.budget.pauseReason ?? progress.budget.summary;
+      const stopMessage = `${pauseMessage} Stopping at the next safe checkpoint so the workflow exits instead of waiting open.`;
       budgetUsage.vercelFunctionsUsed += 1;
       budgetUsage.neonOpsUsed += 1;
-      await requestBudgetPauseStep(runId, pauseMessage);
+      await requestBudgetStopStep(runId, stopMessage);
 
       const pauseProgress = {
         ...progress,
-        controlState: "pause_requested" as const,
-        message: pauseMessage,
+        controlState: "stop_requested" as const,
+        message: stopMessage,
       } satisfies LiveMerchantSyncWorkflowProgress;
 
       noteProgressPublish();
@@ -1691,11 +1692,6 @@ export async function liveMerchantSyncWorkflow(
         undefined,
         startedAt,
       );
-      await waitForResumeIfPaused({
-        runId,
-        startedAt,
-        progress: pauseProgress,
-      });
     };
 
     const initialProgress = makeProgressSnapshot({
@@ -1865,6 +1861,16 @@ export async function liveMerchantSyncWorkflow(
         averageChunkDurationMs,
       });
       await maybePauseForBudget(progressBase);
+      if ((await getRunControlStateStep(runId)) === "stop_requested") {
+        const stopped = await maybeStopForCheckpoint({
+          progress: progressBase,
+          stage: "scanning",
+        });
+
+        if (stopped) {
+          return stopped;
+        }
+      }
 
       budgetUsage.vercelFunctionsUsed += 1;
       const upsertBatch = await upsertChunkStep({
