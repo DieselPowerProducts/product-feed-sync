@@ -65,6 +65,10 @@ interface SyncBudgetProfile {
 
 const MS_PER_MINUTE = 60_000;
 const BYTES_PER_MB = 1024 * 1024;
+const LARGE_DELTA_PRODUCT_THRESHOLD = 2500;
+const LARGE_DELTA_MIN_WARNING_MS = 90 * MS_PER_MINUTE;
+const LARGE_DELTA_MIN_PAUSE_MS = 150 * MS_PER_MINUTE;
+const NO_PROGRESS_PAUSE_MS = 15 * MS_PER_MINUTE;
 
 const FALLBACK_PROFILES: Record<"delta" | "full", SyncBudgetProfile> = {
   delta: {
@@ -208,7 +212,43 @@ export function evaluateSyncBudget(params: {
   profile: SyncBudgetProfile;
   usage: SyncBudgetUsage;
 }): SyncBudgetSnapshot {
-  const { profile, usage } = params;
+  const { usage } = params;
+  const fullProfile = FALLBACK_PROFILES.full;
+  const largeDelta =
+    usage.mode === "delta" &&
+    typeof usage.totalProducts === "number" &&
+    usage.totalProducts >= LARGE_DELTA_PRODUCT_THRESHOLD;
+  const profile = largeDelta
+    ? {
+        ...params.profile,
+        expectedMsPerProduct: Math.max(
+          params.profile.expectedMsPerProduct,
+          fullProfile.expectedMsPerProduct,
+        ),
+        throughputProductsPerMinute: Math.min(
+          params.profile.throughputProductsPerMinute,
+          fullProfile.throughputProductsPerMinute,
+        ),
+        minWarningMs: Math.max(params.profile.minWarningMs, LARGE_DELTA_MIN_WARNING_MS),
+        minPauseMs: Math.max(params.profile.minPauseMs, LARGE_DELTA_MIN_PAUSE_MS),
+        baseVercelFunctions: Math.max(
+          params.profile.baseVercelFunctions,
+          fullProfile.baseVercelFunctions,
+        ),
+        vercelFunctionsPerChunk: Math.max(
+          params.profile.vercelFunctionsPerChunk,
+          fullProfile.vercelFunctionsPerChunk,
+        ),
+        transferOverheadBytes: Math.max(
+          params.profile.transferOverheadBytes,
+          fullProfile.transferOverheadBytes,
+        ),
+        hardTransferBudgetMb: Math.max(
+          params.profile.hardTransferBudgetMb,
+          fullProfile.hardTransferBudgetMb,
+        ),
+      }
+    : params.profile;
   const expectedChunks =
     usage.totalProducts && usage.totalProducts > 0
       ? Math.max(1, Math.ceil(usage.totalProducts / usage.chunkTargetProducts))
@@ -293,6 +333,10 @@ export function evaluateSyncBudget(params: {
   const neonExceeded = neonOpsProjected > neonOpsBudget;
   const functionsExceeded = vercelFunctionsProjected > vercelFunctionsBudget;
   const transferExceeded = transferProjectedMb > transferBudgetMb;
+  const noProgressExceeded =
+    usage.elapsedMs > NO_PROGRESS_PAUSE_MS &&
+    usage.productsScanned === 0 &&
+    usage.chunksCompleted === 0;
 
   let status: SyncBudgetStatus = "ok";
   let summary =
@@ -300,6 +344,7 @@ export function evaluateSyncBudget(params: {
   let pauseReason: string | null = null;
 
   if (
+    noProgressExceeded ||
     durationExceeded ||
     (throughputExceeded && usage.elapsedMs > 10 * MS_PER_MINUTE) ||
     neonExceeded ||
@@ -307,15 +352,17 @@ export function evaluateSyncBudget(params: {
     transferExceeded
   ) {
     status = "pause_requested";
-    pauseReason = durationExceeded
-      ? "Run duration moved outside the safe budget envelope."
-      : throughputExceeded
-        ? "Observed throughput fell below the safe floor from historical runs."
-        : neonExceeded
-          ? "Projected Neon state activity moved above the safe budget."
-          : functionsExceeded
-            ? "Projected Vercel workflow function activity moved above the safe budget."
-            : "Projected network transfer moved above the safe budget.";
+    pauseReason = noProgressExceeded
+      ? "No Shopify scan progress was recorded inside the startup watchdog window."
+      : durationExceeded
+        ? "Run duration moved outside the safe budget envelope."
+        : throughputExceeded
+          ? "Observed throughput fell below the safe floor from historical runs."
+          : neonExceeded
+            ? "Projected Neon state activity moved above the safe budget."
+            : functionsExceeded
+              ? "Projected Vercel workflow function activity moved above the safe budget."
+              : "Projected network transfer moved above the safe budget.";
     summary = `${pauseReason} The workflow should stop at the next safe checkpoint.`;
   } else if (
     Boolean(warningDurationMs && usage.elapsedMs > warningDurationMs) ||
@@ -330,8 +377,9 @@ export function evaluateSyncBudget(params: {
     transferProjectedMb > transferBudgetMb * 0.85
   ) {
     status = "warning";
-    summary =
-      "Run budget is drifting high. Watch the live metrics and stop the run if you need to inspect the current chunk.";
+    summary = largeDelta
+      ? "Large delta run is using the full-catalog safety envelope because many Shopify products changed in the same window."
+      : "Run budget is drifting high. Watch the live metrics and stop the run if you need to inspect the current chunk.";
   }
 
   return {
