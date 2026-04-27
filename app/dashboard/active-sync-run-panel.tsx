@@ -309,7 +309,16 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
     };
   }, [props.initialRun.runId]);
 
-  async function sendControl(action: "pause" | "resume" | "stop") {
+  async function sendControl(action: "pause" | "resume" | "stop" | "cancel") {
+    if (
+      action === "cancel" &&
+      !window.confirm(
+        "Cancel this workflow and clear it from the dashboard? Use this only when the run is stuck and should not resume.",
+      )
+    ) {
+      return;
+    }
+
     setIsControlPending(true);
     setError(null);
 
@@ -326,11 +335,23 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
       );
       const payload = (await response.json()) as {
         ok: boolean;
-        activeRun?: ActiveSyncRunState;
+        activeRun?: ActiveSyncRunState | null;
         message?: string;
       };
 
-      if (!response.ok || !payload.ok || !payload.activeRun) {
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message ?? "Failed to update live sync control.");
+      }
+
+      if (action === "cancel") {
+        eventSourceRef.current?.close();
+        eventSourceRef.current = null;
+        setResultMessage(payload.message ?? "The active workflow was cancelled.");
+        router.refresh();
+        return;
+      }
+
+      if (!payload.activeRun) {
         throw new Error(payload.message ?? "Failed to update live sync control.");
       }
 
@@ -433,6 +454,14 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
                 className="inline-flex rounded-full border border-[rgba(143,54,0,0.18)] bg-[#fff2e6] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#7d3d10] disabled:cursor-not-allowed disabled:opacity-70"
               >
                 Stop and save checkpoint
+              </button>
+              <button
+                type="button"
+                onClick={() => sendControl("cancel")}
+                disabled={isControlPending}
+                className="inline-flex rounded-full border border-[#9f1d1d33] bg-[#fff0f0] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#8a1f1f] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                Cancel and clear
               </button>
             </>
           )}
