@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 const ACTIVE_RUN_STORAGE_KEY = "dpp:first-full-sync-run-id";
 const ACTIVE_RUN_EVENT_INDEX_STORAGE_KEY = "dpp:first-full-sync-event-index";
-const STREAM_RECONNECT_DELAY_MS = 1500;
+const STREAM_RECONNECT_DELAY_MS = 60_000;
 
 type FullSyncProgress = {
   stage: "counting" | "scanning" | "uploading" | "complete";

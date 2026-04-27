@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ActiveSyncRunState } from "@/lib/operator-store";
 import type { SyncBudgetSnapshot } from "@/lib/sync-budget";
 
-const STREAM_RECONNECT_DELAY_MS = 1500;
+const STREAM_RECONNECT_DELAY_MS = 60_000;
 
 type LiveSyncProgress = {
   stage: "counting" | "scanning" | "uploading" | "complete";
