@@ -76,7 +76,7 @@ Capabilities:
 
 ## Cron behavior
 
-The main sync cron route is designed for Vercel cron jobs scheduled at `09:00`, `10:00`, `11:00`, and `12:00 UTC`.
+The main sync cron route is designed for Vercel cron jobs scheduled at `09:00` and `12:00 UTC`.
 
 How the cron path works:
 
@@ -86,7 +86,7 @@ How the cron path works:
 4. The app decides whether the day is `delta`, `full`, or `idle`.
 5. If due, the app skips when the daily window already has a successful run.
 6. If no success exists, the app starts a run only when fewer than two scheduled attempts have already started for that daily window.
-7. If the first attempt fails or is stopped at a checkpoint before a later backup check, one backup attempt may start. Later backup checks skip after the second started attempt.
+7. If the first attempt fails or is stopped at a checkpoint before the backup check, one backup attempt may start. The backup check skips after a successful run or after the second started attempt.
 
 Important:
 

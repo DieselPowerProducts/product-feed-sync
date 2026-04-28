@@ -7,6 +7,7 @@ import {
 } from "@/lib/operator-auth";
 import {
   clearLiveSyncRestartCheckpoint,
+  deleteCronInvocationEntries,
   deleteCronInvocationEntry,
   deleteSyncHistoryEntry,
   getBootstrapState,
@@ -87,13 +88,19 @@ export async function deleteCronInvocationAction(formData: FormData) {
     redirect("/login");
   }
 
-  const entryId = String(formData.get("entryId") ?? "").trim();
+  const entryIds = formData
+    .getAll("entryId")
+    .map((entryId) => String(entryId ?? "").trim())
+    .filter(Boolean);
 
-  if (!entryId) {
+  if (!entryIds.length) {
     redirect("/dashboard?saved=cron-delete-invalid");
   }
 
-  const deleted = await deleteCronInvocationEntry(entryId);
+  const deleted =
+    entryIds.length === 1
+      ? await deleteCronInvocationEntry(entryIds[0])
+      : await deleteCronInvocationEntries(entryIds);
   redirect(
     deleted
       ? "/dashboard?saved=cron-deleted"

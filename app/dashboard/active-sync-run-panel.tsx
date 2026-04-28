@@ -276,6 +276,12 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
       eventSourceRef.current = null;
       setResultMessage(payload.message);
       setError(payload.ok ? null : payload.message);
+      setProgress((current) => ({
+        ...(current ?? toInitialProgress(props.initialRun)),
+        stage: "complete",
+        controlState: "running",
+        message: payload.message,
+      }));
       router.refresh();
     });
 
@@ -376,6 +382,17 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
 
   const progressPercent = approximateProgress(progress);
   const controlState = progress.controlState ?? props.initialRun.controlState;
+  const runStatusLabel = resultMessage
+    ? resultMessage.toLowerCase().includes("error") || !resultMessage.toLowerCase().includes("success")
+      ? "Finished"
+      : "Completed"
+    : controlState === "pause_requested"
+      ? "Pause requested"
+      : controlState === "stop_requested"
+        ? "Stopping"
+        : controlState === "paused"
+          ? "Paused"
+          : "Running";
   const budget = progress.budget;
   const phaseLabel = useMemo(() => {
     if (progress.merchantPhase === "reconciling") {
@@ -414,13 +431,7 @@ export function ActiveSyncRunPanel(props: { initialRun: ActiveSyncRunState }) {
 
         <div className="flex flex-wrap gap-2">
           <span className="inline-flex rounded-full border border-line bg-white/80 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-          {controlState === "pause_requested"
-              ? "Pause requested"
-              : controlState === "stop_requested"
-                ? "Stopping"
-              : controlState === "paused"
-                ? "Paused"
-                : "Running"}
+            {runStatusLabel}
           </span>
           {!allowControl ? (
             <span className="inline-flex rounded-full border border-line bg-white/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted">

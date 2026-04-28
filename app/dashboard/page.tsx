@@ -43,6 +43,17 @@ type DashboardData = {
   degraded: boolean;
 };
 
+type CronInvocation = Awaited<ReturnType<typeof getCronInvocations>>[number];
+
+type CronInvocationGroup = {
+  id: string;
+  windowStart: string;
+  entries: CronInvocation[];
+};
+
+const PRIMARY_CRON_HOUR_UTC = 9;
+const PRIMARY_CRON_MINUTE_UTC = 0;
+
 function getSearchParam(
   searchParams: Record<string, string | string[] | undefined>,
   key: string,
@@ -100,6 +111,66 @@ function prettifyStorageMode(mode: "neon" | "blob" | "local" | "memory") {
 
 function formatNullableTimestamp(value: string | null | undefined) {
   return value ? formatTimestamp(value) : "Never";
+}
+
+function getCronWindowStart(value: string) {
+  const date = new Date(value);
+  const todayWindow = new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      PRIMARY_CRON_HOUR_UTC,
+      PRIMARY_CRON_MINUTE_UTC,
+      0,
+      0,
+    ),
+  );
+
+  if (date.getTime() >= todayWindow.getTime()) {
+    return todayWindow.toISOString();
+  }
+
+  return new Date(todayWindow.getTime() - 86_400_000).toISOString();
+}
+
+function groupCronInvocations(entries: CronInvocation[]) {
+  const groups = new Map<string, CronInvocationGroup>();
+
+  for (const entry of entries) {
+    const windowStart = getCronWindowStart(entry.firedAt);
+    const groupId = `${windowStart}:${entry.decisionMode ?? "none"}`;
+    const group = groups.get(groupId);
+
+    if (group) {
+      group.entries.push(entry);
+    } else {
+      groups.set(groupId, {
+        id: groupId,
+        windowStart,
+        entries: [entry],
+      });
+    }
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      entries: [...group.entries].sort((left, right) =>
+        left.firedAt.localeCompare(right.firedAt),
+      ),
+    }))
+    .sort((left, right) => right.windowStart.localeCompare(left.windowStart));
+}
+
+function getCronOutcomeTone(outcome: CronInvocation["outcome"]) {
+  return outcome === "completed" ||
+    outcome === "queued" ||
+    outcome === "skipped_duplicate" ||
+    outcome === "skipped_retry_limit" ||
+    outcome === "skipped_idle"
+    ? "font-semibold text-success"
+    : "font-semibold text-accent-strong";
 }
 
 function getSavedMessage(saved: string | undefined) {
@@ -260,6 +331,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const flashMessage = getSavedMessage(saved);
   const syncHistory = history.filter((entry) => entry.purpose !== "test-save");
   const testSaveRuns = history.filter((entry) => entry.purpose === "test-save");
+  const cronInvocationGroups = groupCronInvocations(cronInvocations);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 md:px-10">
@@ -516,10 +588,9 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   Downloadable run exports stay on object storage.
                   <br />
                   Vercel cron has one primary trigger at <code>09:00 UTC</code>
-                  , with backup checks at <code>10:00</code>,{" "}
-                  <code>11:00</code>, and <code>12:00 UTC</code>.
+                  , with one backup check at <code>12:00 UTC</code>.
                   <br />
-                  Backup checks skip after one successful run or two started
+                  The backup check skips after one successful run or two started
                   attempts in the current daily window.
                 </p>
               </div>
@@ -540,7 +611,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </div>
           <p className="text-sm text-muted">
             These rows show only real Vercel scheduler contacts. Rejected
-            probes do not persist here, and backup triggers skip if the due
+            probes do not persist here, and the backup trigger skips if the due
             delta or full already completed or used its one retry for the
             current cron window.
           </p>
@@ -573,72 +644,82 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </article>
         </div>
 
-        {cronInvocations.length ? (
-          <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
-                  <tr>
-                    <th className="px-4 py-3">Fired</th>
-                    <th className="px-4 py-3">Decision</th>
-                    <th className="px-4 py-3">Outcome</th>
-                    <th className="px-4 py-3">Run</th>
-                    <th className="px-4 py-3">Message</th>
-                    <th className="px-4 py-3">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cronInvocations.map((entry) => (
-                    <tr
-                      key={entry.id}
-                      className="border-b border-line/70 align-top last:border-b-0"
-                    >
-                      <td className="px-4 py-4">
-                        <p className="font-semibold text-foreground">
-                          {formatTimestamp(entry.firedAt)}
-                        </p>
-                        <p className="mt-2 text-muted">
-                          {entry.authorized ? "authorized" : "unauthorized"}
-                        </p>
-                      </td>
-                      <td className="px-4 py-4 text-muted">
-                        {entry.decisionMode ?? "none"}
-                      </td>
-                      <td className="px-4 py-4">
-                        <p
-                          className={
-                            entry.outcome === "completed" ||
-                            entry.outcome === "queued" ||
-                            entry.outcome === "skipped_duplicate" ||
-                            entry.outcome === "skipped_retry_limit" ||
-                            entry.outcome === "skipped_idle"
-                              ? "font-semibold text-success"
-                              : "font-semibold text-accent-strong"
-                          }
-                        >
-                          {entry.outcome}
-                        </p>
-                      </td>
-                      <td className="px-4 py-4 font-mono text-xs uppercase tracking-[0.16em] text-muted">
-                        {entry.runId ?? "-"}
-                      </td>
-                      <td className="px-4 py-4 text-muted">{entry.message}</td>
-                      <td className="px-4 py-4">
-                        <form action={deleteCronInvocationAction}>
-                          <input type="hidden" name="entryId" value={entry.id} />
-                          <button
-                            type="submit"
-                            className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
-                          >
-                            Delete
-                          </button>
-                        </form>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        {cronInvocationGroups.length ? (
+          <div className="mt-6 space-y-4">
+            {cronInvocationGroups.map((group) => {
+              const primaryEntry =
+                group.entries.find((entry) => entry.runId) ?? group.entries[0];
+
+              return (
+                <article
+                  key={group.id}
+                  className="overflow-hidden rounded-[1.5rem] border border-line bg-white/70"
+                >
+                  <div className="flex flex-col gap-3 border-b border-line bg-white/85 px-4 py-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                        Cron window
+                      </p>
+                      <p className="mt-1 text-base font-semibold text-foreground">
+                        {formatTimestamp(group.windowStart)} daily {primaryEntry.decisionMode ?? "none"} goal
+                      </p>
+                    </div>
+                    <form action={deleteCronInvocationAction}>
+                      {group.entries.map((entry) => (
+                        <input
+                          key={entry.id}
+                          type="hidden"
+                          name="entryId"
+                          value={entry.id}
+                        />
+                      ))}
+                      <button
+                        type="submit"
+                        className="inline-flex rounded-full border border-line bg-white/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-accent-strong transition-colors hover:bg-white"
+                      >
+                        Delete
+                      </button>
+                    </form>
+                  </div>
+
+                  <div className="divide-y divide-line/70">
+                    {group.entries.map((entry, index) => (
+                      <div
+                        key={entry.id}
+                        className="grid gap-4 px-4 py-4 text-sm md:grid-cols-[minmax(120px,0.8fr)_minmax(110px,0.7fr)_minmax(170px,1fr)_minmax(260px,2fr)]"
+                      >
+                        <div>
+                          <p className="font-semibold text-foreground">
+                            {index === 0 ? "Primary" : "Backup"}:{" "}
+                            {formatTimestamp(entry.firedAt)}
+                          </p>
+                          <p className="mt-2 text-muted">
+                            {entry.authorized ? "authorized" : "unauthorized"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                            Outcome
+                          </p>
+                          <p className={`mt-2 ${getCronOutcomeTone(entry.outcome)}`}>
+                            {entry.outcome}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                            Run
+                          </p>
+                          <p className="mt-2 break-all font-mono text-xs uppercase tracking-[0.16em] text-muted">
+                            {entry.runId ?? "-"}
+                          </p>
+                        </div>
+                        <p className="text-muted">{entry.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="mt-6 rounded-[1.5rem] border border-dashed border-line bg-white/55 p-6 text-sm text-muted">

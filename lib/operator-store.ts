@@ -1706,6 +1706,30 @@ export async function deleteCronInvocationEntry(entryId: string) {
   return true;
 }
 
+export async function deleteCronInvocationEntries(entryIds: string[]) {
+  const ids = new Set(entryIds.map((entryId) => entryId.trim()).filter(Boolean));
+
+  if (!ids.size) {
+    return false;
+  }
+
+  const state = await readState();
+  const cronInvocations = state.cronInvocations.filter(
+    (entry) => !ids.has(entry.id),
+  );
+
+  if (cronInvocations.length === state.cronInvocations.length) {
+    return false;
+  }
+
+  await writeState({
+    ...state,
+    cronInvocations,
+  });
+
+  return true;
+}
+
 export async function getLatestSuccessfulLiveSyncHistory() {
   const state = await readState();
 
