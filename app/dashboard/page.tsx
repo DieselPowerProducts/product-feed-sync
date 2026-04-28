@@ -683,39 +683,61 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   </div>
 
                   <div className="divide-y divide-line/70">
-                    {group.entries.map((entry, index) => (
-                      <div
-                        key={entry.id}
-                        className="grid gap-4 px-4 py-4 text-sm md:grid-cols-[minmax(120px,0.8fr)_minmax(110px,0.7fr)_minmax(170px,1fr)_minmax(260px,2fr)]"
-                      >
-                        <div>
-                          <p className="font-semibold text-foreground">
-                            {index === 0 ? "Primary" : "Backup"}:{" "}
-                            {formatTimestamp(entry.firedAt)}
-                          </p>
-                          <p className="mt-2 text-muted">
-                            {entry.authorized ? "authorized" : "unauthorized"}
-                          </p>
+                    {group.entries.map((entry, index) => {
+                      const label = index === 0 ? "Primary" : "Backup";
+                      const skippedWithoutRun =
+                        !entry.runId && entry.outcome.startsWith("skipped_");
+
+                      if (skippedWithoutRun) {
+                        return (
+                          <div
+                            key={entry.id}
+                            className="px-4 py-2.5 text-sm"
+                          >
+                            <p className="font-semibold text-foreground">
+                              {label}: {formatTimestamp(entry.firedAt)}{" "}
+                              <span className="text-muted">- Outcome: </span>
+                              <span className={getCronOutcomeTone(entry.outcome)}>
+                                {entry.outcome}
+                              </span>
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={entry.id}
+                          className="grid gap-4 px-4 py-4 text-sm md:grid-cols-[minmax(120px,0.8fr)_minmax(110px,0.7fr)_minmax(170px,1fr)_minmax(260px,2fr)]"
+                        >
+                          <div>
+                            <p className="font-semibold text-foreground">
+                              {label}: {formatTimestamp(entry.firedAt)}
+                            </p>
+                            <p className="mt-2 text-muted">
+                              {entry.authorized ? "authorized" : "unauthorized"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                              Outcome
+                            </p>
+                            <p className={`mt-2 ${getCronOutcomeTone(entry.outcome)}`}>
+                              {entry.outcome}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                              Run
+                            </p>
+                            <p className="mt-2 break-all font-mono text-xs uppercase tracking-[0.16em] text-muted">
+                              {entry.runId ?? "-"}
+                            </p>
+                          </div>
+                          <p className="text-muted">{entry.message}</p>
                         </div>
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
-                            Outcome
-                          </p>
-                          <p className={`mt-2 ${getCronOutcomeTone(entry.outcome)}`}>
-                            {entry.outcome}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
-                            Run
-                          </p>
-                          <p className="mt-2 break-all font-mono text-xs uppercase tracking-[0.16em] text-muted">
-                            {entry.runId ?? "-"}
-                          </p>
-                        </div>
-                        <p className="text-muted">{entry.message}</p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </article>
               );
