@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import {
   appendPendingShopifyDeletes,
+  getLiveOfferIndex,
   type PendingShopifyDeleteRecord,
 } from "@/lib/operator-store";
-import { buildShopifyOfferId, extractShopifyLegacyId } from "@/lib/shopify-offer-id";
+import {
+  buildShopifyOfferId,
+  extractShopifyLegacyId,
+  parseShopifyOfferId,
+} from "@/lib/shopify-offer-id";
 import { isValidShopifyWebhookRequest } from "@/lib/shopify";
 
 interface ShopifyDeletedVariantPayload {
@@ -24,6 +29,41 @@ interface ShopifyProductsDeleteWebhookPayload {
   handle?: string | null;
   variants?: ShopifyDeletedVariantPayload[] | null;
   variant_gids?: ShopifyDeletedVariantGidPayload[] | null;
+}
+
+function getConfiguredMerchantDataSourceName() {
+  if (!env.googleMerchantDataSource) {
+    return null;
+  }
+
+  if (env.googleMerchantDataSource.startsWith("accounts/")) {
+    return env.googleMerchantDataSource;
+  }
+
+  if (!env.googleMerchantAccountId) {
+    return null;
+  }
+
+  const accountName = env.googleMerchantAccountId.startsWith("accounts/")
+    ? env.googleMerchantAccountId
+    : `accounts/${env.googleMerchantAccountId}`;
+
+  return `${accountName}/dataSources/${env.googleMerchantDataSource}`;
+}
+
+function splitLiveOfferIndexKey(key: string) {
+  const [contentLanguage, feedLabel, ...offerIdParts] = key.split("~");
+  const offerId = offerIdParts.join("~");
+
+  if (!contentLanguage || !feedLabel || !offerId) {
+    return null;
+  }
+
+  return {
+    contentLanguage,
+    feedLabel,
+    offerId,
+  };
 }
 
 export const dynamic = "force-dynamic";
@@ -97,29 +137,75 @@ export async function POST(request: Request) {
   const queuedAt = new Date().toISOString();
   const shopDomain = request.headers.get("x-shopify-shop-domain");
   const webhookId = request.headers.get("x-shopify-webhook-id");
-  const entries: PendingShopifyDeleteRecord[] = Array.from(variantIds).map(
-    (variantId) => {
-      const variantMeta = variantMetaById.get(variantId);
+  const entriesByOfferId = new Map<string, PendingShopifyDeleteRecord>();
 
-      return {
-        offerId: buildShopifyOfferId(productId, variantId),
-        contentLanguage: env.googleContentLanguage || "en",
-        feedLabel: env.googleFeedLabel || "US",
+  for (const variantId of variantIds) {
+    const variantMeta = variantMetaById.get(variantId);
+    const offerId = buildShopifyOfferId(productId, variantId);
+
+    entriesByOfferId.set(offerId, {
+      offerId,
+      contentLanguage: env.googleContentLanguage || "en",
+      feedLabel: env.googleFeedLabel || "US",
+      reason: "shopify_hard_delete",
+      productId,
+      variantId,
+      title: payload.title?.trim() || `Deleted Shopify product ${productId}`,
+      variantTitle: variantMeta?.title ?? null,
+      handle: payload.handle?.trim() ?? "",
+      sku: variantMeta?.sku ?? null,
+      link: null,
+      queuedAt,
+      source: "shopify_webhook",
+      webhookId,
+      shopDomain,
+    });
+  }
+
+  const dataSourceName = getConfiguredMerchantDataSourceName();
+
+  if (dataSourceName) {
+    const liveOfferIndex = await getLiveOfferIndex(dataSourceName);
+    const offerIdPrefix = `shopify_ZZ_${productId}_`;
+
+    for (const key of liveOfferIndex?.keys ?? []) {
+      const target = splitLiveOfferIndexKey(key);
+
+      if (!target?.offerId.startsWith(offerIdPrefix)) {
+        continue;
+      }
+
+      const parsedOfferId = parseShopifyOfferId(target.offerId);
+
+      if (
+        parsedOfferId.productId !== productId ||
+        !parsedOfferId.variantId ||
+        entriesByOfferId.has(target.offerId)
+      ) {
+        continue;
+      }
+
+      entriesByOfferId.set(target.offerId, {
+        offerId: target.offerId,
+        contentLanguage: target.contentLanguage,
+        feedLabel: target.feedLabel,
         reason: "shopify_hard_delete",
         productId,
-        variantId,
+        variantId: parsedOfferId.variantId,
         title: payload.title?.trim() || `Deleted Shopify product ${productId}`,
-        variantTitle: variantMeta?.title ?? null,
+        variantTitle: null,
         handle: payload.handle?.trim() ?? "",
-        sku: variantMeta?.sku ?? null,
+        sku: null,
         link: null,
         queuedAt,
         source: "shopify_webhook",
         webhookId,
         shopDomain,
-      };
-    },
-  );
+      });
+    }
+  }
+
+  const entries = Array.from(entriesByOfferId.values());
 
   await appendPendingShopifyDeletes(entries);
 
