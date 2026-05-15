@@ -1175,6 +1175,28 @@ function normalizeCustomLabel2(value: string | null) {
   return normalizeText(value) || null;
 }
 
+function computeMarginCustomLabel2(params: {
+  priceAmount: number;
+  costAmount: number | null;
+}) {
+  if (params.priceAmount <= 0 || params.costAmount === null) {
+    return null;
+  }
+
+  const marginPercent =
+    ((params.priceAmount - params.costAmount) / params.priceAmount) * 100;
+
+  if (marginPercent <= 20) {
+    return "c";
+  }
+
+  if (marginPercent < 30) {
+    return "b";
+  }
+
+  return "a";
+}
+
 function readSelectedOptionValue(
   selectedOptions: ShopifySelectedOption[] | null | undefined,
   names: string[],
@@ -1822,10 +1844,17 @@ function buildPreviewRecord(params: {
     hasSalePrice ? compareAtAmount : priceAmount,
     currencyCode,
   );
+  const costAmount = parseAmount(variant.inventoryItem?.unitCost?.amount ?? null);
   const costOfGoodsSold = formatMicros(
-    parseAmount(variant.inventoryItem?.unitCost?.amount ?? null),
+    costAmount,
     variant.inventoryItem?.unitCost?.currencyCode ?? currencyCode,
   );
+  const customLabel2 =
+    normalizeCustomLabel2(adWordsSpend) ??
+    computeMarginCustomLabel2({
+      priceAmount,
+      costAmount,
+    });
   const record = {
     offerId: buildShopifyOfferId(productId, variantId),
     contentLanguage: env.googleContentLanguage || "en",
@@ -1868,7 +1897,7 @@ function buildPreviewRecord(params: {
       sizeSystem: apparelProduct ? "US" : null,
       customLabel0: computePriceBucket(priceAmount),
       customLabel1: computeHighPriceBucket(priceAmount),
-      customLabel2: normalizeCustomLabel2(adWordsSpend),
+      customLabel2,
       customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
       customLabel4: parseEngineLabel({
         title: product.title,
