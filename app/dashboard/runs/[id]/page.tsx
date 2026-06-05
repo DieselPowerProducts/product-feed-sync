@@ -38,6 +38,41 @@ function describeRunSource(artifact: {
   return artifact.trigger === "cron" ? "scheduled" : "manual";
 }
 
+function formatCount(value: number | null | undefined) {
+  return typeof value === "number" ? value.toLocaleString() : "0";
+}
+
+function getMerchantErrorCount(artifact: SyncRunArtifact) {
+  return artifact.merchant?.errorCount ?? artifact.stats.merchantWriteErrors ?? 0;
+}
+
+function getRunResultLabel(artifact: SyncRunArtifact, validationIssues: number) {
+  const merchantErrors = getMerchantErrorCount(artifact);
+  const merchantSuccesses =
+    (artifact.stats.merchantUpsertsSucceeded ?? 0) +
+    (artifact.stats.merchantDeletesSucceeded ?? 0);
+
+  if (merchantErrors > 0 && merchantSuccesses > 0) {
+    return "partial";
+  }
+
+  if (!artifact.ok) {
+    return "failed";
+  }
+
+  if (validationIssues > 0) {
+    return "needs attention";
+  }
+
+  return "success";
+}
+
+function getResultClassName(resultLabel: string) {
+  return resultLabel === "success"
+    ? "mt-3 text-lg font-semibold text-success"
+    : "mt-3 text-lg font-semibold text-accent-strong";
+}
+
 export const dynamic = "force-dynamic";
 
 export default async function RunSamplePage(props: RunSamplePageProps) {
@@ -45,14 +80,17 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
 
   const { id } = await props.params;
   const artifact = await readRunArtifact<SyncRunArtifact>(id);
-  const validationIssues = artifact?.stats.validationIssues ?? 0;
-  const validationSample = artifact?.validationSample ?? [];
-  const deleteSample = artifact?.deleteSample ?? [];
 
   if (!artifact) {
     notFound();
   }
 
+  const validationIssues = artifact.stats.validationIssues ?? 0;
+  const validationSample = artifact.validationSample ?? [];
+  const deleteSample = artifact.deleteSample ?? [];
+  const merchantErrors = artifact.merchant?.errors ?? [];
+  const merchantErrorCount = getMerchantErrorCount(artifact);
+  const resultLabel = getRunResultLabel(artifact, validationIssues);
   const deleteSampleMode = artifact.deleteSampleMode ?? "candidate";
   const deleteHeading =
     deleteSampleMode === "candidate"
@@ -101,18 +139,71 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
             <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
               Result
             </p>
+            <p className={getResultClassName(resultLabel)}>{resultLabel}</p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Shopify scanned
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {formatCount(artifact.stats.productsFetched)}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              GMC upserts
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {formatCount(artifact.stats.merchantUpsertsSucceeded)} /{" "}
+              {formatCount(artifact.stats.merchantUpsertsAttempted)}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              GMC deletes
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {formatCount(artifact.stats.merchantDeletesSucceeded)} /{" "}
+              {formatCount(artifact.stats.merchantDeletesAttempted)}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              GMC errors
+            </p>
             <p
               className={
-                !artifact.ok || validationIssues > 0
+                merchantErrorCount > 0
                   ? "mt-3 text-lg font-semibold text-accent-strong"
-                  : "mt-3 text-lg font-semibold text-success"
+                  : "mt-3 text-lg font-semibold text-foreground"
               }
             >
-              {!artifact.ok
-                ? "failed"
-                : validationIssues > 0
-                  ? "needs attention"
-                  : "success"}
+              {formatCount(merchantErrorCount)}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Validation issues
+            </p>
+            <p
+              className={
+                validationIssues > 0
+                  ? "mt-3 text-lg font-semibold text-accent-strong"
+                  : "mt-3 text-lg font-semibold text-foreground"
+              }
+            >
+              {validationIssues}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
+              Prepared rows
+            </p>
+            <p className="mt-3 text-lg font-semibold text-foreground">
+              {formatCount(artifact.stats.recordsPrepared)}
             </p>
           </div>
           <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
@@ -121,14 +212,6 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
             </p>
             <p className="mt-3 text-lg font-semibold text-foreground">
               {artifact.includedSample.length}
-            </p>
-          </div>
-          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-              Validation sample
-            </p>
-            <p className="mt-3 text-lg font-semibold text-foreground">
-              {validationSample.length}
             </p>
           </div>
           <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
@@ -145,20 +228,6 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
             </p>
             <p className="mt-3 text-lg font-semibold text-foreground">
               {deleteSample.length}
-            </p>
-          </div>
-          <div className="rounded-[1.4rem] border border-line bg-white/65 p-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted">
-              Validation issues
-            </p>
-            <p
-              className={
-                validationIssues > 0
-                  ? "mt-3 text-lg font-semibold text-accent-strong"
-                  : "mt-3 text-lg font-semibold text-foreground"
-              }
-            >
-              {validationIssues}
             </p>
           </div>
         </div>
@@ -215,6 +284,69 @@ export default async function RunSamplePage(props: RunSamplePageProps) {
           ) : null}
         </div>
       </section>
+
+      {merchantErrorCount > 0 ? (
+        <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.3em] text-accent-strong">
+                Merchant Write Errors
+              </p>
+              <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
+                GMC requests that did not complete cleanly
+              </h2>
+            </div>
+            <p className="text-sm text-muted">
+              Showing {merchantErrors.length.toLocaleString()} stored error
+              {merchantErrors.length === 1 ? "" : "s"} of{" "}
+              {merchantErrorCount.toLocaleString()} total.
+            </p>
+          </div>
+
+          {merchantErrors.length ? (
+            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-line bg-white/70">
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-line bg-white/85 text-xs uppercase tracking-[0.18em] text-muted">
+                    <tr>
+                      <th className="px-4 py-3">Action</th>
+                      <th className="px-4 py-3">Offer ID</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {merchantErrors.map((error, index) => (
+                      <tr
+                        key={`${error.action}-${error.offerId ?? "unknown"}-${index}`}
+                        className="border-b border-line/70 align-top last:border-b-0"
+                      >
+                        <td className="px-4 py-4 font-semibold text-accent-strong">
+                          {error.action}
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="break-all font-mono text-xs text-muted">
+                            {error.offerId ?? "-"}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4 text-muted">
+                          {error.status ?? "network/client"}
+                        </td>
+                        <td className="px-4 py-4 text-muted">{error.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-[1.4rem] border border-dashed border-line bg-white/50 p-5 text-sm leading-7 text-muted">
+              This run recorded Merchant write errors, but no individual error
+              sample was stored.
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <section className="mt-8 glass-panel rounded-[1.75rem] p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">

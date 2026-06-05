@@ -173,6 +173,33 @@ function getCronOutcomeTone(outcome: CronInvocation["outcome"]) {
     : "font-semibold text-accent-strong";
 }
 
+function getSyncHistoryResultLabel(entry: DashboardData["history"][number]) {
+  const merchantErrors = entry.stats.merchantWriteErrors ?? 0;
+  const merchantSuccesses =
+    (entry.stats.merchantUpsertsSucceeded ?? 0) +
+    (entry.stats.merchantDeletesSucceeded ?? 0);
+
+  if (merchantErrors > 0 && merchantSuccesses > 0) {
+    return "partial";
+  }
+
+  if (!entry.ok) {
+    return "failed";
+  }
+
+  if ((entry.stats.validationIssues ?? 0) > 0) {
+    return "needs attention";
+  }
+
+  return "success";
+}
+
+function getSyncHistoryResultTone(resultLabel: string) {
+  return resultLabel === "success"
+    ? "font-semibold text-success"
+    : "font-semibold text-accent-strong";
+}
+
 function getSavedMessage(saved: string | undefined) {
   switch (saved) {
     case "settings":
@@ -785,7 +812,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {syncHistory.map((entry) => (
+                  {syncHistory.map((entry) => {
+                    const resultLabel = getSyncHistoryResultLabel(entry);
+
+                    return (
                     <tr key={entry.id} className="border-b border-line/70 align-top last:border-b-0">
                       <td className="px-4 py-4">
                         <p className="font-semibold text-foreground">
@@ -803,20 +833,19 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         </p>
                       </td>
                       <td className="px-4 py-4">
-                        <p
-                          className={
-                            !entry.ok || (entry.stats.validationIssues ?? 0) > 0
-                              ? "font-semibold text-accent-strong"
-                              : "font-semibold text-success"
-                          }
-                        >
-                          {!entry.ok
-                            ? "failed"
-                            : (entry.stats.validationIssues ?? 0) > 0
-                              ? "needs attention"
-                              : "success"}
+                        <p className={getSyncHistoryResultTone(resultLabel)}>
+                          {resultLabel}
                         </p>
                         <p className="mt-2 text-muted">{entry.notes[0] ?? "No notes"}</p>
+                        {(entry.stats.merchantWriteErrors ?? 0) > 0 ? (
+                          <p className="mt-2 font-mono text-xs uppercase tracking-[0.16em] text-accent-strong">
+                            {entry.stats.merchantWriteErrors} Merchant write{" "}
+                            error
+                            {(entry.stats.merchantWriteErrors ?? 0) === 1
+                              ? ""
+                              : "s"}
+                          </p>
+                        ) : null}
                         {(entry.stats.validationIssues ?? 0) > 0 ? (
                           <p className="mt-2 font-mono text-xs uppercase tracking-[0.16em] text-accent-strong">
                             {entry.stats.validationIssues} validation issue
@@ -877,10 +906,16 @@ export default async function DashboardPage(props: DashboardPageProps) {
                           GMC records: {entry.stats.recordsPrepared}
                         </p>
                         <p className="mt-2">
+                          Merchant upserts:{" "}
+                          {entry.stats.merchantUpsertsSucceeded ?? 0}/
+                          {entry.stats.merchantUpsertsAttempted ?? 0}
+                        </p>
+                        <p className="mt-2">
                           Excluded from feed: {entry.stats.excluded}
                         </p>
                         <p className="mt-2">
                           Merchant deletes:{" "}
+                          {entry.stats.merchantDeletesSucceeded ?? 0}/
                           {entry.stats.merchantDeletesAttempted ?? 0}
                         </p>
                         <p className="mt-2">
@@ -894,7 +929,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
                         </p>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

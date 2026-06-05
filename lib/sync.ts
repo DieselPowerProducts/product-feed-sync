@@ -1033,6 +1033,27 @@ function determineAvailability(variant: ShopifyVariantNode) {
   return variant.availableForSale ? ("in_stock" as const) : ("out_of_stock" as const);
 }
 
+function hasShopifyCollectiveTag(product: ShopifyProductNode) {
+  return product.tags.some(
+    (tag) => normalizeLookupToken(tag) === "shopify collective",
+  );
+}
+
+function findVariantExclusionReason(
+  product: ShopifyProductNode,
+  variant: ShopifyVariantNode,
+) {
+  if (
+    hasShopifyCollectiveTag(product) &&
+    typeof variant.inventoryQuantity === "number" &&
+    variant.inventoryQuantity <= 0
+  ) {
+    return "shopify_collective_out_of_stock";
+  }
+
+  return null;
+}
+
 function computePriceBucket(price: number) {
   if (price <= 200) {
     return "0 - 200";
@@ -1720,6 +1741,24 @@ function buildPreviewRecord(params: {
 
   const variantId = resolveLegacyId(variant.legacyResourceId, variant.id);
   const productId = resolveLegacyId(product.legacyResourceId, product.id);
+  const link = normalizeStorefrontUrl({
+    fallbackHandle: product.handle,
+    onlineStoreUrl: product.onlineStoreUrl,
+    storefrontBaseUrl,
+    variantId,
+  });
+  const variantExclusionReason = findVariantExclusionReason(product, variant);
+
+  if (variantExclusionReason) {
+    return {
+      excluded: variantExclusionReason,
+      details: [
+        "Shopify Collective variant has zero or negative inventory, so it is excluded from GMC until Collective inventory is available.",
+      ],
+      link,
+    };
+  }
+
   const primaryImage =
     pickFirstNonEmpty(variant.image?.url ?? null, productMediaUrls[0] ?? null) ??
     null;
@@ -1738,12 +1777,6 @@ function buildPreviewRecord(params: {
   const hasSalePrice =
     compareAtAmount !== null && compareAtAmount > 0 && compareAtAmount > priceAmount;
   const currencyCode = env.googleFeedCurrency || "USD";
-  const link = normalizeStorefrontUrl({
-    fallbackHandle: product.handle,
-    onlineStoreUrl: product.onlineStoreUrl,
-    storefrontBaseUrl,
-    variantId,
-  });
 
   if (!link) {
     return {
