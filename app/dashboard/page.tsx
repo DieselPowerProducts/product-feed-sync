@@ -200,7 +200,10 @@ function getSyncHistoryResultTone(resultLabel: string) {
     : "font-semibold text-accent-strong";
 }
 
-function getSavedMessage(saved: string | undefined) {
+function getSavedMessage(
+  saved: string | undefined,
+  activeRun: DashboardData["activeRun"],
+) {
   switch (saved) {
     case "settings":
       return {
@@ -228,11 +231,19 @@ function getSavedMessage(saved: string | undefined) {
         text: "The test save finished and the downloadable file is ready below.",
       };
     case "test-export-started":
+      if (!activeRun || activeRun.purpose !== "test-save") {
+        return null;
+      }
+
       return {
         tone: "success" as const,
         text: "The test save was queued in the background. Refresh run history below in a few minutes for the completed file.",
       };
     case "test-export-running":
+      if (!activeRun) {
+        return null;
+      }
+
       return {
         tone: "error" as const,
         text: "Another sync or test save is already running. Wait for it to finish before starting a new test save.",
@@ -355,7 +366,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
   } = await loadDashboardData(now);
   const upcoming = getUpcomingSyncDates(now, settings);
   const saved = getSearchParam(searchParams, "saved");
-  const flashMessage = getSavedMessage(saved);
+  const flashMessage = getSavedMessage(saved, activeRun);
   const syncHistory = history.filter((entry) => entry.purpose !== "test-save");
   const testSaveRuns = history.filter((entry) => entry.purpose === "test-save");
   const cronInvocationGroups = groupCronInvocations(cronInvocations);
