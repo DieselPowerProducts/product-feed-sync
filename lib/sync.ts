@@ -89,6 +89,9 @@ const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
         productTypeGoogle: metafield(namespace: "google", key: "product_type") {
           value
         }
+        productSubtypeCustom: metafield(namespace: "custom", key: "product_subtype") {
+          value
+        }
         gtinCustom: metafield(namespace: "custom", key: "gtin") {
           value
         }
@@ -156,6 +159,12 @@ const EXPLICIT_VARIANT_FEED_METAFIELDS = `
                 value
               }
               productTypeGoogle: metafield(namespace: "google", key: "product_type") {
+                value
+              }
+              productSubtypeCustom: metafield(namespace: "custom", key: "product_subtype") {
+                value
+              }
+              enableLowStockMessageCustom: metafield(namespace: "custom", key: "enable_low_stock_message") {
                 value
               }
               gtinCustom: metafield(namespace: "custom", key: "gtin") {
@@ -680,6 +689,8 @@ interface ShopifyExplicitFeedMetafields {
   productTypeCustom?: ShopifySingleMetafieldValue | null;
   productTypeFeed?: ShopifySingleMetafieldValue | null;
   productTypeGoogle?: ShopifySingleMetafieldValue | null;
+  productSubtypeCustom?: ShopifySingleMetafieldValue | null;
+  enableLowStockMessageCustom?: ShopifySingleMetafieldValue | null;
   gtinCustom?: ShopifySingleMetafieldValue | null;
   gtinFeed?: ShopifySingleMetafieldValue | null;
   gtinGoogle?: ShopifySingleMetafieldValue | null;
@@ -971,6 +982,50 @@ function readExplicitMetafieldValue(
   return null;
 }
 
+function normalizeProductTypeBreadcrumb(value: string | null | undefined) {
+  const segments = normalizeText(value)
+    .split(">")
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean);
+
+  return segments.length > 0 ? segments.join(" > ") : null;
+}
+
+function buildProductTypeBreadcrumb(
+  productType: string | null,
+  productSubtype: string | null,
+) {
+  const typeValue = normalizeProductTypeBreadcrumb(productType);
+  const subtypeValue = normalizeProductTypeBreadcrumb(productSubtype);
+
+  if (!typeValue) {
+    return subtypeValue;
+  }
+
+  if (!subtypeValue) {
+    return typeValue;
+  }
+
+  const lastTypeSegment = typeValue.split(">").map((segment) => normalizeText(segment)).at(-1);
+  const firstSubtypeSegment = subtypeValue
+    .split(">")
+    .map((segment) => normalizeText(segment))
+    .at(0);
+
+  if (normalizeLookupToken(lastTypeSegment) === normalizeLookupToken(firstSubtypeSegment)) {
+    const subtypeTail = subtypeValue
+      .split(">")
+      .map((segment) => normalizeText(segment))
+      .filter(Boolean)
+      .slice(1)
+      .join(" > ");
+
+    return subtypeTail ? `${typeValue} > ${subtypeTail}` : typeValue;
+  }
+
+  return `${typeValue} > ${subtypeValue}`;
+}
+
 function collectMediaUrls(product: ShopifyProductNode) {
   const urls = new Set<string>();
   const featuredUrl = product.featuredMedia?.image?.url ?? null;
@@ -1029,7 +1084,19 @@ function normalizeStorefrontUrl(params: {
   }
 }
 
+function shouldMarkBackorderOutOfStock(variant: ShopifyVariantNode) {
+  return (
+    typeof variant.inventoryQuantity === "number" &&
+    variant.inventoryQuantity <= 0 &&
+    normalizeBooleanish(variant.enableLowStockMessageCustom?.value ?? null)
+  );
+}
+
 function determineAvailability(variant: ShopifyVariantNode) {
+  if (shouldMarkBackorderOutOfStock(variant)) {
+    return "out_of_stock" as const;
+  }
+
   return variant.availableForSale ? ("in_stock" as const) : ("out_of_stock" as const);
 }
 
@@ -1804,6 +1871,9 @@ function buildPreviewRecord(params: {
       "productTypeFeed",
       "productTypeGoogle",
     ]) ?? normalizeText(product.productType) ?? null;
+  const productSubtype = readExplicitMetafieldValue(metafieldOwners, [
+    "productSubtypeCustom",
+  ]);
   const gtin =
     normalizeGtin(variant.barcode) ??
     normalizeGtin(
@@ -1870,7 +1940,8 @@ function buildPreviewRecord(params: {
       ? pickFirstNonEmpty(selectedSize, variantTitleSize, explicitSize)
       : pickFirstNonEmpty(shopifySize, explicitSize, selectedSize, variantTitleSize)
     : null;
-  const productTypeValues = productType ? [productType] : [];
+  const productTypeValue = buildProductTypeBreadcrumb(productType, productSubtype);
+  const productTypeValues = productTypeValue ? [productTypeValue] : [];
   const gtins = gtin ? [gtin] : [];
   const salePrice = hasSalePrice ? formatMicros(priceAmount, currencyCode) : null;
   const price = formatMicros(

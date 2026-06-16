@@ -100,8 +100,8 @@ Important:
 Confirmed mapping and exclusion rules in the current code:
 
 - `brand` comes from Shopify `vendor`
-- `availability` uses Shopify storefront sale state
-- backorders remain `IN_STOCK`
+- `availability` uses Shopify storefront sale state, except variants with `inventoryQuantity <= 0` and `custom.enable_low_stock_message` truthy are marked `OUT_OF_STOCK`
+- `product_type` is built as `type > subtype` from the resolved product type plus `custom.product_subtype`
 - `additionalImageLinks` includes all non-primary product images
 - videos are ignored
 - `identifierExists` is `true` only when a valid GTIN or MPN exists
