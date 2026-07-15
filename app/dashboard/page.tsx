@@ -377,7 +377,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl space-y-4">
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-accent-strong">
-              Operator Dashboard
+              Operations Dashboard
             </p>
             <h1 className="text-foreground">
               <span className="block text-4xl font-bold tracking-[-0.05em] md:text-[64px] md:tracking-[-4px]">
