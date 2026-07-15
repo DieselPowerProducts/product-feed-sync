@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.mjs",
     "queue:missing-shopify-deletes": "node scripts/queue-missing-shopify-deletes.mjs"
   },
   "dependencies": {

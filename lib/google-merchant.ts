@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { env, getConfigurationStatus, hasEnvValue } from "@/lib/env";
+import type { GoogleAvailability } from "@/lib/product-availability";
 
 const GOOGLE_OAUTH_SCOPE = "https://www.googleapis.com/auth/content";
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -77,7 +78,8 @@ export interface MerchantProductInputRecord {
     link: string;
     imageLink: string;
     additionalImageLinks?: string[];
-    availability: "IN_STOCK" | "OUT_OF_STOCK";
+    availability: GoogleAvailability;
+    availabilityDate?: string | null;
     price: MerchantPriceValue;
     salePrice?: MerchantPriceValue | null;
     condition: "NEW";
