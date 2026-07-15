@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const PRIMARY_CRON_HOUR_UTC = 9;
+const PRIMARY_CRON_HOUR_UTC = 12;
 const PRIMARY_CRON_MINUTE_UTC = 0;
 
 function buildCronInvocationId(firedAt: string) {

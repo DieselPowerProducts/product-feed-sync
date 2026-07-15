@@ -51,7 +51,7 @@ type CronInvocationGroup = {
   entries: CronInvocation[];
 };
 
-const PRIMARY_CRON_HOUR_UTC = 9;
+const PRIMARY_CRON_HOUR_UTC = 12;
 const PRIMARY_CRON_MINUTE_UTC = 0;
 
 function getSearchParam(
@@ -625,8 +625,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
                   Operational state now lives in the persistent app store.
                   Downloadable run exports stay on object storage.
                   <br />
-                  Vercel cron has one primary trigger at <code>09:00 UTC</code>
-                  , with one backup check at <code>12:00 UTC</code>.
+                  Vercel cron has one primary trigger at <code>12:00 UTC</code>
+                  , with one backup check at <code>15:00 UTC</code>.
                   <br />
                   The backup check skips after one successful run or two started
                   attempts in the current daily window.

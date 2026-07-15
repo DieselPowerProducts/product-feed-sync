@@ -36,7 +36,7 @@ const MS_PER_DAY = 86_400_000;
 const MS_PER_MINUTE = 60_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
-const CRON_HOUR_UTC = 9;
+const CRON_HOUR_UTC = 12;
 const CRON_MINUTE_UTC = 0;
 export const DEFAULT_PREVIEW_LIMIT = 5;
 export const LIVE_SYNC_CHUNK_PRODUCT_TARGET = 1500;
@@ -316,7 +316,6 @@ ${EXPLICIT_PRODUCT_FEED_METAFIELDS}
               barcode
               price
               compareAtPrice
-              availableForSale
               googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
                 value
               }
@@ -368,7 +367,6 @@ const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
             barcode
             price
             compareAtPrice
-            availableForSale
             googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
               value
             }
@@ -746,7 +744,6 @@ interface ShopifyVariantNode extends ShopifyExplicitFeedMetafields {
   barcode: string | null;
   price: string;
   compareAtPrice: string | null;
-  availableForSale: boolean;
   googleMpn?: ShopifySingleMetafieldValue | null;
   image?: {
     url?: string | null;
@@ -1932,7 +1929,6 @@ function buildPreviewRecord(params: {
     metafieldAvailability: variant.productAvailabilityCustom?.value ?? null,
     metafieldAvailabilityDate:
       variant.productAvailabilityDateCustom?.value ?? null,
-    availableForSale: variant.availableForSale,
   });
   const record = {
     offerId: buildShopifyOfferId(productId, variantId),

@@ -19,7 +19,6 @@ test("maps in-stock and out-of-stock metafields directly", () => {
     mapProductAvailability({
       metafieldAvailability: "In Stock",
       metafieldAvailabilityDate: "2026-10-10",
-      availableForSale: false,
     }),
     {
       source: "in_stock",
@@ -32,7 +31,6 @@ test("maps in-stock and out-of-stock metafields directly", () => {
     mapProductAvailability({
       metafieldAvailability: "Out of Stock",
       metafieldAvailabilityDate: null,
-      availableForSale: true,
     }).availability,
     "OUT_OF_STOCK",
   );
@@ -43,7 +41,6 @@ test("maps backorders with their specific date in Pacific time", () => {
     mapProductAvailability({
       metafieldAvailability: "Backorder",
       metafieldAvailabilityDate: "2026-09-15",
-      availableForSale: true,
       now: new Date("2026-07-15T19:00:00Z"),
     }),
     {
@@ -83,7 +80,6 @@ test("maps build to order to in stock without an availability date", () => {
     mapProductAvailability({
       metafieldAvailability: "Built to Order",
       metafieldAvailabilityDate: "2026-12-01",
-      availableForSale: false,
     }),
     {
       source: "build_to_order",
@@ -94,12 +90,11 @@ test("maps build to order to in stock without an availability date", () => {
   );
 });
 
-test("preserves the Shopify sale-state fallback for blank or unknown metafields", () => {
+test("defaults blank or unknown availability metafields to in stock", () => {
   assert.equal(
     mapProductAvailability({
       metafieldAvailability: null,
       metafieldAvailabilityDate: null,
-      availableForSale: true,
     }).availability,
     "IN_STOCK",
   );
@@ -107,9 +102,8 @@ test("preserves the Shopify sale-state fallback for blank or unknown metafields"
     mapProductAvailability({
       metafieldAvailability: "Unexpected value",
       metafieldAvailabilityDate: null,
-      availableForSale: false,
     }).availability,
-    "OUT_OF_STOCK",
+    "IN_STOCK",
   );
 });
 

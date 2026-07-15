@@ -76,7 +76,7 @@ Capabilities:
 
 ## Cron behavior
 
-The main sync cron route is designed for Vercel cron jobs scheduled at `09:00` and `12:00 UTC`.
+The main sync cron route is designed for Vercel cron jobs scheduled at `12:00` and `15:00 UTC`. The primary run starts 1 hour 45 minutes after StockBridge's `10:15 UTC` daily full sync so newly discovered products have time to receive their Shopify availability metafields first.
 
 How the cron path works:
 
@@ -100,7 +100,7 @@ Important:
 Confirmed mapping and exclusion rules in the current code:
 
 - `brand` comes from Shopify `vendor`
-- `availability` comes from variant metafield `custom.product_availability`: `In Stock` -> `IN_STOCK`, `Out of Stock` -> `OUT_OF_STOCK`, `Backorder` -> `BACKORDER`, and `Built to Order`/`Build to Order` -> `IN_STOCK`; blank or unknown values retain the Shopify storefront sale-state fallback
+- `availability` comes only from variant metafield `custom.product_availability`: `In Stock` -> `IN_STOCK`, `Out of Stock` -> `OUT_OF_STOCK`, `Backorder` -> `BACKORDER`, and `Built to Order`/`Build to Order` -> `IN_STOCK`; blank or unknown values default to `IN_STOCK`
 - `availabilityDate` is emitted only for backorders from `custom.product_availability_date`; blank, invalid, stale, or more-than-one-year dates use the same generic 60-day estimate as the PDP, formatted at 1:00 PM Pacific with an ISO 8601 offset
 - `product_type` is built as `type > subtype` from the resolved product type plus `custom.product_subtype`
 - `additionalImageLinks` includes all non-primary product images

@@ -137,7 +137,6 @@ export function buildGoogleAvailabilityDate(params: {
 export function mapProductAvailability(params: {
   metafieldAvailability: string | null | undefined;
   metafieldAvailabilityDate: string | null | undefined;
-  availableForSale: boolean;
   now?: Date;
 }): ProductAvailabilityMapping {
   const source = normalizeProductAvailability(params.metafieldAvailability);
@@ -177,7 +176,7 @@ export function mapProductAvailability(params: {
     case "unknown":
       return {
         source,
-        availability: params.availableForSale ? "IN_STOCK" : "OUT_OF_STOCK",
+        availability: "IN_STOCK",
         availabilityDate: null,
         shippingLabelOverride: null,
       };
