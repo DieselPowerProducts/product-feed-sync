@@ -20,6 +20,10 @@ import {
   type SyncSettings,
 } from "@/lib/operator-store";
 import { buildShopifyOfferId, parseShopifyOfferId } from "@/lib/shopify-offer-id";
+import {
+  mapProductAvailability,
+  type GoogleAvailability,
+} from "@/lib/product-availability";
 export { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import {
   fetchShopConnectionDetails,
@@ -32,7 +36,7 @@ const MS_PER_DAY = 86_400_000;
 const MS_PER_MINUTE = 60_000;
 const FALLBACK_ANCHOR_DATE = "2026-03-10";
 const SHOPIFY_PAGE_SIZE = 250;
-const CRON_HOUR_UTC = 9;
+const CRON_HOUR_UTC = 12;
 const CRON_MINUTE_UTC = 0;
 export const DEFAULT_PREVIEW_LIMIT = 5;
 export const LIVE_SYNC_CHUNK_PRODUCT_TARGET = 1500;
@@ -164,7 +168,10 @@ const EXPLICIT_VARIANT_FEED_METAFIELDS = `
               productSubtypeCustom: metafield(namespace: "custom", key: "product_subtype") {
                 value
               }
-              enableLowStockMessageCustom: metafield(namespace: "custom", key: "enable_low_stock_message") {
+              productAvailabilityCustom: metafield(namespace: "custom", key: "product_availability") {
+                value
+              }
+              productAvailabilityDateCustom: metafield(namespace: "custom", key: "product_availability_date") {
                 value
               }
               gtinCustom: metafield(namespace: "custom", key: "gtin") {
@@ -309,9 +316,6 @@ ${EXPLICIT_PRODUCT_FEED_METAFIELDS}
               barcode
               price
               compareAtPrice
-              inventoryPolicy
-              inventoryQuantity
-              availableForSale
               googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
                 value
               }
@@ -363,9 +367,6 @@ const SHOPIFY_PRODUCT_VARIANTS_QUERY = `
             barcode
             price
             compareAtPrice
-            inventoryPolicy
-            inventoryQuantity
-            availableForSale
             googleMpn: metafield(namespace: "${GOOGLE_MPN_METAFIELD_NAMESPACE}", key: "${GOOGLE_MPN_METAFIELD_KEY}") {
               value
             }
@@ -444,7 +445,8 @@ export interface FeedPreviewRecord {
     link: string;
     imageLink: string;
     additionalImageLinks: string[];
-    availability: "IN_STOCK" | "OUT_OF_STOCK";
+    availability: GoogleAvailability;
+    availabilityDate: string | null;
     price: GooglePriceValue;
     salePrice: GooglePriceValue | null;
     condition: "NEW";
@@ -690,7 +692,8 @@ interface ShopifyExplicitFeedMetafields {
   productTypeFeed?: ShopifySingleMetafieldValue | null;
   productTypeGoogle?: ShopifySingleMetafieldValue | null;
   productSubtypeCustom?: ShopifySingleMetafieldValue | null;
-  enableLowStockMessageCustom?: ShopifySingleMetafieldValue | null;
+  productAvailabilityCustom?: ShopifySingleMetafieldValue | null;
+  productAvailabilityDateCustom?: ShopifySingleMetafieldValue | null;
   gtinCustom?: ShopifySingleMetafieldValue | null;
   gtinFeed?: ShopifySingleMetafieldValue | null;
   gtinGoogle?: ShopifySingleMetafieldValue | null;
@@ -741,9 +744,6 @@ interface ShopifyVariantNode extends ShopifyExplicitFeedMetafields {
   barcode: string | null;
   price: string;
   compareAtPrice: string | null;
-  inventoryPolicy: string | null;
-  inventoryQuantity: number | null;
-  availableForSale: boolean;
   googleMpn?: ShopifySingleMetafieldValue | null;
   image?: {
     url?: string | null;
@@ -1082,43 +1082,6 @@ function normalizeStorefrontUrl(params: {
   } catch {
     return buildFallback();
   }
-}
-
-function shouldMarkBackorderOutOfStock(variant: ShopifyVariantNode) {
-  return (
-    typeof variant.inventoryQuantity === "number" &&
-    variant.inventoryQuantity <= 0 &&
-    normalizeBooleanish(variant.enableLowStockMessageCustom?.value ?? null)
-  );
-}
-
-function determineAvailability(variant: ShopifyVariantNode) {
-  if (shouldMarkBackorderOutOfStock(variant)) {
-    return "out_of_stock" as const;
-  }
-
-  return variant.availableForSale ? ("in_stock" as const) : ("out_of_stock" as const);
-}
-
-function hasShopifyCollectiveTag(product: ShopifyProductNode) {
-  return product.tags.some(
-    (tag) => normalizeLookupToken(tag) === "shopify collective",
-  );
-}
-
-function findVariantExclusionReason(
-  product: ShopifyProductNode,
-  variant: ShopifyVariantNode,
-) {
-  if (
-    hasShopifyCollectiveTag(product) &&
-    typeof variant.inventoryQuantity === "number" &&
-    variant.inventoryQuantity <= 0
-  ) {
-    return "shopify_collective_out_of_stock";
-  }
-
-  return null;
 }
 
 function computePriceBucket(price: number) {
@@ -1471,8 +1434,13 @@ function isApparelProductType(...values: Array<string | null | undefined>) {
 function buildShippingLabel(params: {
   stateRestrictions: string | null;
   quickShip: string | null;
+  override: string | null;
 }) {
-  const { stateRestrictions, quickShip } = params;
+  const { stateRestrictions, quickShip, override } = params;
+
+  if (override) {
+    return override;
+  }
 
   if (stateRestrictions) {
     return stateRestrictions;
@@ -1558,6 +1526,16 @@ function validateFeedRecord(params: {
     issues.push({
       reason: "validation_missing_required_availability",
       detail: "Missing required Google field: availability",
+    });
+  }
+
+  if (
+    productAttributes.availability === "BACKORDER" &&
+    !normalizeText(productAttributes.availabilityDate)
+  ) {
+    issues.push({
+      reason: "validation_missing_required_availability_date",
+      detail: "Missing required Google field for backorder: availability_date",
     });
   }
 
@@ -1814,18 +1792,6 @@ function buildPreviewRecord(params: {
     storefrontBaseUrl,
     variantId,
   });
-  const variantExclusionReason = findVariantExclusionReason(product, variant);
-
-  if (variantExclusionReason) {
-    return {
-      excluded: variantExclusionReason,
-      details: [
-        "Shopify Collective variant has zero or negative inventory, so it is excluded from GMC until Collective inventory is available.",
-      ],
-      link,
-    };
-  }
-
   const primaryImage =
     pickFirstNonEmpty(variant.image?.url ?? null, productMediaUrls[0] ?? null) ??
     null;
@@ -1959,6 +1925,11 @@ function buildPreviewRecord(params: {
       priceAmount,
       costAmount,
     });
+  const availabilityMapping = mapProductAvailability({
+    metafieldAvailability: variant.productAvailabilityCustom?.value ?? null,
+    metafieldAvailabilityDate:
+      variant.productAvailabilityDateCustom?.value ?? null,
+  });
   const record = {
     offerId: buildShopifyOfferId(productId, variantId),
     contentLanguage: env.googleContentLanguage || "en",
@@ -1979,8 +1950,8 @@ function buildPreviewRecord(params: {
       link,
       imageLink: primaryImage,
       additionalImageLinks,
-      availability:
-        determineAvailability(variant) === "in_stock" ? "IN_STOCK" : "OUT_OF_STOCK",
+      availability: availabilityMapping.availability,
+      availabilityDate: availabilityMapping.availabilityDate,
       price: price ?? {
         amountMicros: "0",
         currencyCode,
@@ -2011,6 +1982,7 @@ function buildPreviewRecord(params: {
       shippingLabel: buildShippingLabel({
         stateRestrictions,
         quickShip,
+        override: availabilityMapping.shippingLabelOverride,
       }),
       costOfGoodsSold,
     },

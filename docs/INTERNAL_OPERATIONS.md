@@ -76,7 +76,7 @@ Capabilities:
 
 ## Cron behavior
 
-The main sync cron route is designed for Vercel cron jobs scheduled at `09:00` and `12:00 UTC`.
+The main sync cron route is designed for Vercel cron jobs scheduled at `12:00` and `15:00 UTC`. The primary run starts 1 hour 45 minutes after StockBridge's `10:15 UTC` daily full sync so newly discovered products have time to receive their Shopify availability metafields first.
 
 How the cron path works:
 
@@ -100,7 +100,8 @@ Important:
 Confirmed mapping and exclusion rules in the current code:
 
 - `brand` comes from Shopify `vendor`
-- `availability` uses Shopify storefront sale state, except variants with `inventoryQuantity <= 0` and `custom.enable_low_stock_message` truthy are marked `OUT_OF_STOCK`
+- `availability` comes only from variant metafield `custom.product_availability`: `In Stock` -> `IN_STOCK`, `Out of Stock` -> `OUT_OF_STOCK`, `Backorder` -> `BACKORDER`, and `Built to Order`/`Build to Order` -> `IN_STOCK`; blank or unknown values default to `IN_STOCK`
+- `availabilityDate` is emitted only for backorders from `custom.product_availability_date`; blank, invalid, stale, or more-than-one-year dates use the same generic 60-day estimate as the PDP, formatted at 1:00 PM Pacific with an ISO 8601 offset
 - `product_type` is built as `type > subtype` from the resolved product type plus `custom.product_subtype`
 - `additionalImageLinks` includes all non-primary product images
 - videos are ignored
@@ -108,7 +109,7 @@ Confirmed mapping and exclusion rules in the current code:
 - apparel-only attributes are emitted for apparel product types
 - `customLabel2` first maps ad-spend values `Above Average` -> `a`, `Average` -> `b`, and `Below Average` -> `c`; when ad-spend is blank, it falls back to margin from Shopify `Price` and `Cost per item`: `<= 20%` -> `c`, `> 20% and < 30%` -> `b`, and `>= 30%` -> `a`
 - `customLabel4` checks `application` first to infer engine fitment from explicit engine names or make keywords (`Ram`/`Dodge` -> `Cummins`, `Ford` -> `Powerstroke`, `GM`/`GMC`/`Chevy` -> `Duramax`), then falls back to the last 8 words of the title when `application` has no engine signal
-- `shippingLabel` prioritizes state restrictions, then `fast_free` for any `Quick Ship` product, then `Standard`
+- `shippingLabel` is always `1-12 Weeks` for Built to Order products; otherwise it prioritizes state restrictions, then `fast_free` for any `Quick Ship` product, then `Standard`
 - exclude `Google_Exclude` items, `seo.hidden` items, variants with no image, and variants with no storefront URL
 
 ## Storage behavior

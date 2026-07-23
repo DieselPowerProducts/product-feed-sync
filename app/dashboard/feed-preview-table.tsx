@@ -6,6 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type { GoogleAvailability } from "@/lib/product-availability";
 
 export type GooglePriceValue = {
   amountMicros: string;
@@ -33,7 +34,8 @@ export type FeedPreviewRecord = {
     link: string;
     imageLink: string;
     additionalImageLinks: string[];
-    availability: "IN_STOCK" | "OUT_OF_STOCK";
+    availability: GoogleAvailability;
+    availabilityDate: string | null;
     price: GooglePriceValue;
     salePrice: GooglePriceValue | null;
     condition: "NEW";
@@ -143,6 +145,12 @@ const columns: ColumnDefinition[] = [
     label: "productAttributes.availability",
     defaultWidth: 170,
     getValue: (record) => record.productAttributes.availability,
+  },
+  {
+    id: "productAttributes.availabilityDate",
+    label: "productAttributes.availabilityDate",
+    defaultWidth: 230,
+    getValue: (record) => record.productAttributes.availabilityDate,
   },
   {
     id: "productAttributes.price",

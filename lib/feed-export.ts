@@ -14,6 +14,7 @@ type FeedExportRow = {
   image_link: string;
   additional_image_link: string;
   availability: string;
+  availability_date: string;
   condition: string;
   price: string;
   sale_price: string;
@@ -62,6 +63,7 @@ const FEED_EXPORT_HEADERS: Array<keyof FeedExportRow> = [
   "image_link",
   "additional_image_link",
   "availability",
+  "availability_date",
   "condition",
   "price",
   "sale_price",
@@ -149,6 +151,7 @@ function toFeedExportRow(record: FeedPreviewRecord): FeedExportRow {
     image_link: record.productAttributes.imageLink,
     additional_image_link: record.productAttributes.additionalImageLinks.join(","),
     availability: record.productAttributes.availability.toLowerCase(),
+    availability_date: record.productAttributes.availabilityDate ?? "",
     condition: record.productAttributes.condition.toLowerCase(),
     price: formatPriceValue(record.productAttributes.price),
     sale_price: formatPriceValue(record.productAttributes.salePrice),
