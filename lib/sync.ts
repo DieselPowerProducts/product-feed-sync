@@ -24,6 +24,9 @@ import {
   mapProductAvailability,
   type GoogleAvailability,
 } from "@/lib/product-availability";
+import {
+  resolveAgedQuickShipCustomLabel0,
+} from "@/lib/aged-quick-ship";
 export { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import {
   fetchShopConnectionDetails,
@@ -75,6 +78,9 @@ const SHOPIFY_REFERENCE_METAFIELD_FIELDS = `
 // Feed-critical metafields stay explicit so feed output never depends on
 // Shopify metafield ordering or pagination.
 const EXPLICIT_PRODUCT_FEED_METAFIELDS = `
+        lastOrderedAtSales: metafield(namespace: "sales", key: "last_ordered_at") {
+          value
+        }
         googleProductTypeCustom: metafield(namespace: "custom", key: "google_product_type") {
           value
         }
@@ -770,6 +776,7 @@ interface ShopifyProductNode extends ShopifyExplicitFeedMetafields {
   onlineStoreUrl: string | null;
   seoHidden?: ShopifySingleMetafieldValue | null;
   googleMpn?: ShopifySingleMetafieldValue | null;
+  lastOrderedAtSales?: ShopifySingleMetafieldValue | null;
   featuredMedia?: ShopifyMediaNode | null;
   media?: ShopifyConnection<ShopifyMediaNode>;
   variants?: ShopifyConnection<ShopifyVariantNode>;
@@ -1082,18 +1089,6 @@ function normalizeStorefrontUrl(params: {
   } catch {
     return buildFallback();
   }
-}
-
-function computePriceBucket(price: number) {
-  if (price <= 200) {
-    return "0 - 200";
-  }
-
-  if (price <= 365) {
-    return "200 - 365";
-  }
-
-  return "365+";
 }
 
 function computeHighPriceBucket(price: number) {
@@ -1925,6 +1920,10 @@ function buildPreviewRecord(params: {
       priceAmount,
       costAmount,
     });
+  const customLabel0 = resolveAgedQuickShipCustomLabel0({
+    quickShipValue: variant.quickShipCustom?.value ?? null,
+    lastOrderedAt: product.lastOrderedAtSales?.value ?? null,
+  });
   const availabilityMapping = mapProductAvailability({
     metafieldAvailability: variant.productAvailabilityCustom?.value ?? null,
     metafieldAvailabilityDate:
@@ -1970,7 +1969,7 @@ function buildPreviewRecord(params: {
       itemGroupId: productId,
       size,
       sizeSystem: apparelProduct ? "US" : null,
-      customLabel0: computePriceBucket(priceAmount),
+      customLabel0,
       customLabel1: computeHighPriceBucket(priceAmount),
       customLabel2,
       customLabel3: normalizeBooleanish(quickShip) ? "Quick Ship" : null,
