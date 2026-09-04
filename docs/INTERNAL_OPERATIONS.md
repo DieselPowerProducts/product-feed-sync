@@ -110,7 +110,7 @@ Confirmed mapping and exclusion rules in the current code:
 - `customLabel0` is `aged quick ship` when variant metafield `custom.quick_ship` is an integer of at least 1 and product metafield `sales.last_ordered_at` is more than 90 days old; otherwise it is blank
 - `customLabel2` first maps ad-spend values `Above Average` -> `a`, `Average` -> `b`, and `Below Average` -> `c`; when ad-spend is blank, it falls back to margin from Shopify `Price` and `Cost per item`: `<= 20%` -> `c`, `> 20% and < 30%` -> `b`, and `>= 30%` -> `a`
 - `customLabel4` checks `application` first to infer engine fitment from explicit engine names or make keywords (`Ram`/`Dodge` -> `Cummins`, `Ford` -> `Powerstroke`, `GM`/`GMC`/`Chevy` -> `Duramax`), then falls back to the last 8 words of the title when `application` has no engine signal
-- `shippingLabel` is always `1-12 Weeks` for Built to Order products; otherwise it prioritizes state restrictions, then `fast_free` for any `Quick Ship` product, then `Standard`
+- `shippingLabel` is always `1-12 Weeks` for Built to Order products; otherwise it prioritizes state restrictions, then `fast_free` only when `Quick Ship` is true and the variant price is over `$199`, then `Standard`
 - exclude `Google_Exclude` items, `seo.hidden` items, variants with no image, and variants with no storefront URL
 
 ## Storage behavior

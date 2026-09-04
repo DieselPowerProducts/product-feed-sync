@@ -27,6 +27,7 @@ import {
 import {
   resolveAgedQuickShipCustomLabel0,
 } from "@/lib/aged-quick-ship";
+import { buildShippingLabel } from "@/lib/shipping-label";
 export { buildFeedRecordFingerprint } from "@/lib/feed-fingerprint";
 import {
   fetchShopConnectionDetails,
@@ -1426,28 +1427,6 @@ function isApparelProductType(...values: Array<string | null | undefined>) {
   return values.some((value) => normalizeLookupToken(value).includes("apparel"));
 }
 
-function buildShippingLabel(params: {
-  stateRestrictions: string | null;
-  quickShip: string | null;
-  override: string | null;
-}) {
-  const { stateRestrictions, quickShip, override } = params;
-
-  if (override) {
-    return override;
-  }
-
-  if (stateRestrictions) {
-    return stateRestrictions;
-  }
-
-  if (normalizeBooleanish(quickShip)) {
-    return "fast_free";
-  }
-
-  return "Standard";
-}
-
 function normalizeGtin(value: string | null | undefined) {
   const digitsOnly = normalizeText(value).replace(/\D/g, "");
 
@@ -1980,7 +1959,8 @@ function buildPreviewRecord(params: {
       shippingWeight: formatWeight(variant.inventoryItem?.measurement?.weight),
       shippingLabel: buildShippingLabel({
         stateRestrictions,
-        quickShip,
+        quickShip: normalizeBooleanish(quickShip),
+        priceAmount,
         override: availabilityMapping.shippingLabelOverride,
       }),
       costOfGoodsSold,
