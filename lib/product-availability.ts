@@ -16,6 +16,8 @@ export interface ProductAvailabilityMapping {
 
 const DEFAULT_BACKORDER_DAYS = 60;
 export const BUILD_TO_ORDER_SHIPPING_LABEL = "1-12 Weeks";
+export const DISCONTINUED_PRODUCT_AVAILABILITY_EXCLUSION_REASON =
+  "product_availability_discontinued";
 const AVAILABILITY_TIME_ZONE = "America/Los_Angeles";
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})/;
 
@@ -24,6 +26,20 @@ function normalizeAvailabilityToken(value: string | null | undefined) {
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, " ");
+}
+
+export function isDiscontinuedProductAvailability(
+  value: string | null | undefined,
+) {
+  return normalizeAvailabilityToken(value) === "discontinued";
+}
+
+export function getProductAvailabilityExclusionReason(
+  value: string | null | undefined,
+) {
+  return isDiscontinuedProductAvailability(value)
+    ? DISCONTINUED_PRODUCT_AVAILABILITY_EXCLUSION_REASON
+    : null;
 }
 
 export function normalizeProductAvailability(

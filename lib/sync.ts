@@ -21,6 +21,7 @@ import {
 } from "@/lib/operator-store";
 import { buildShopifyOfferId, parseShopifyOfferId } from "@/lib/shopify-offer-id";
 import {
+  getProductAvailabilityExclusionReason,
   mapProductAvailability,
   type GoogleAvailability,
 } from "@/lib/product-availability";
@@ -1766,6 +1767,19 @@ function buildPreviewRecord(params: {
     storefrontBaseUrl,
     variantId,
   });
+
+  const productAvailabilityExclusionReason =
+    getProductAvailabilityExclusionReason(
+      variant.productAvailabilityCustom?.value ?? null,
+    );
+
+  if (productAvailabilityExclusionReason) {
+    return {
+      excluded: productAvailabilityExclusionReason,
+      link,
+    };
+  }
+
   const primaryImage =
     pickFirstNonEmpty(variant.image?.url ?? null, productMediaUrls[0] ?? null) ??
     null;

@@ -2,9 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGoogleAvailabilityDate,
+  DISCONTINUED_PRODUCT_AVAILABILITY_EXCLUSION_REASON,
+  getProductAvailabilityExclusionReason,
+  isDiscontinuedProductAvailability,
   mapProductAvailability,
   normalizeProductAvailability,
 } from "../lib/product-availability.ts";
+
+test("identifies discontinued availability case-insensitively", () => {
+  assert.equal(isDiscontinuedProductAvailability("discontinued"), true);
+  assert.equal(isDiscontinuedProductAvailability("Discontinued"), true);
+  assert.equal(isDiscontinuedProductAvailability("  DISCONTINUED  "), true);
+  assert.equal(isDiscontinuedProductAvailability("Out of Stock"), false);
+  assert.equal(isDiscontinuedProductAvailability(null), false);
+  assert.equal(
+    getProductAvailabilityExclusionReason("Discontinued"),
+    DISCONTINUED_PRODUCT_AVAILABILITY_EXCLUSION_REASON,
+  );
+  assert.equal(getProductAvailabilityExclusionReason("In Stock"), null);
+});
 
 test("normalizes every supported Shopify stock label", () => {
   assert.equal(normalizeProductAvailability("In Stock"), "in_stock");
